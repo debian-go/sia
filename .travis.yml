@@ -1,0 +1,23 @@
+language: go
+
+os:
+  - linux
+
+go:
+  - 1.6
+
+install:
+  - make dependencies
+  - test -z "$(go fmt ./...)"
+  - make
+
+script: make test && make test-long && make cover && make bench
+
+sudo: false
+
+branches:
+  only:
+    - master
+
+notifications:
+  email: false
