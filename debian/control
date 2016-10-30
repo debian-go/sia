@@ -1,0 +1,54 @@
+Source: sia
+Section: devel
+Priority: extra
+Maintainer: Debian Go Packaging Team <pkg-go-maintainers@lists.alioth.debian.org>
+Uploaders: Free Ekanayaka <freee@debian.org>
+Build-Depends: debhelper (>= 9),
+               dh-golang,
+               golang-go,
+               golang-github-bgentry-speakeasy-dev,
+               golang-github-dchest-blake2b-dev,
+               golang-github-inconshreveable-go-update-dev,
+               golang-github-julienschmidt-httprouter-dev,
+               golang-github-kardianos-osext-dev,
+               golang-github-klauspost-reedsolomon-dev,
+               golang-github-nebulouslabs-bolt-dev,
+               golang-github-nebulouslabs-demotemutex-dev,
+               golang-github-nebulouslabs-ed25519-dev,
+               golang-github-nebulouslabs-entropy-mnemonics-dev,
+               golang-github-nebulouslabs-go-upnp-dev,
+               golang-github-nebulouslabs-merkletree-dev,
+	       golang-github-huin-goupnp-dev,
+	       golang-github-inconshreveable-muxado-dev,
+               golang-github-spf13-cobra-dev
+Standards-Version: 3.9.8
+Homepage: https://github.com/NebulousLabs/Sia
+Vcs-Browser: https://anonscm.debian.org/cgit/pkg-go/packages/sia.git
+Vcs-Git: https://anonscm.debian.org/git/pkg-go/packages/sia.git
+XS-Go-Import-Path: github.com/NebulousLabs/Sia
+
+Package: sia
+Architecture: any
+Built-Using: ${misc:Built-Using}
+Depends: ${shlibs:Depends},
+         ${misc:Depends}
+Description: Blockchain-based marketplace for file storage
+ Sia is a decentralized cloud storage platform aimed at giving users
+ control of their data. Data is split into hundreds of erasure coded
+ pieces and encrypted locally, and then each piece is uploaded to a
+ separate host. A blockchain is used to create cryptographic contracts
+ ensuring that hosts will only get paid if they actually store the
+ data. Out of hundreds of hosts, only a fraction are required to
+ recover the original file.
+ .
+ Anybody can join the network as a host and get income from the
+ storage they contribute. This openness allows Sia to build and take
+ advantage of a global network of small datacenters. Combined with
+ advanced algorithms for storing and retrieving data, Sia is poised to
+ be a highly competitive cloud storage platform. More information
+ about the technology can be found on our website and in the 'doc'
+ folder of the repo.
+ .
+ Sia is ready for use with small sums of money and non-critical files,
+ but until the network has a more proven track record, we advise
+ against using it as a sole means of storing important data.

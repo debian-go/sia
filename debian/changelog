@@ -1,0 +1,5 @@
+sia (1.0.3-1) unstable; urgency=medium
+
+  * Initial release (Closes: #847706)
+
+ -- Free Ekanayaka <freee@debian.org>  Sun, 30 Oct 2016 13:30:38 +0000

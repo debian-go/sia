@@ -1,0 +1,22 @@
+From: Free Ekanayaka <freee@debian.org>
+Date: Sun, 29 Jan 2017 10:57:01 +0000
+Subject: dont-use-vendored-muxado
+
+Use the stock Debian version of the muxado library.
+---
+ modules/gateway/peers.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/modules/gateway/peers.go b/modules/gateway/peers.go
+index 8884eb6..862f0d8 100644
+--- a/modules/gateway/peers.go
++++ b/modules/gateway/peers.go
+@@ -10,7 +10,7 @@ import (
+ 	"github.com/NebulousLabs/Sia/crypto"
+ 	"github.com/NebulousLabs/Sia/encoding"
+ 	"github.com/NebulousLabs/Sia/modules"
+-	"github.com/NebulousLabs/muxado"
++	"github.com/inconshreveable/muxado"
+ )
+ 
+ var (
