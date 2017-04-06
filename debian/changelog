@@ -1,3 +1,9 @@
+sia (1.0.4-1) UNRELEASED; urgency=medium
+
+  * New upstream version 1.0.4
+
+ -- Bjorn Dolk <debian@bjorndolk.com>  Thu, 06 Apr 2017 18:29:24 +0200
+
 sia (1.0.3-1) unstable; urgency=medium
 
   * Initial release (Closes: #847706)
