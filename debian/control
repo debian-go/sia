@@ -31,7 +31,8 @@ Package: sia
 Architecture: any
 Built-Using: ${misc:Built-Using}
 Depends: ${shlibs:Depends},
-         ${misc:Depends}
+         ${misc:Depends},
+	 adduser
 Description: Blockchain-based marketplace for file storage
  Sia is a decentralized cloud storage platform aimed at giving users
  control of their data. Data is split into hundreds of erasure coded
