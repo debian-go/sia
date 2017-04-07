@@ -1,5 +1,3 @@
 #!/bin/bash
-adduser --system sia
-mkdir -p /var/lib/sia
-chown sia /var/lib/sia
+adduser --system --create-home --home /var/lib/sia  sia
 
