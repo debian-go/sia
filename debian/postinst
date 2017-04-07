@@ -1,0 +1,5 @@
+#!/bin/bash
+adduser --system sia
+mkdir -p /var/lib/sia
+chown sia /var/lib/sia
+

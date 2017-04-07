@@ -1,0 +1,19 @@
+[Unit]
+Description=Sia daemon
+After=network.target
+
+[Service]
+Type=simple
+User=sia
+Nice=5
+WorkingDirectory=/var/lib/sia/
+ExecStart=/usr/local/bin/siad 
+Restart=on-failure
+RestartSec=30
+#CPUQuota=50%
+#MemoryLimit=7G
+
+[Install]
+WantedBy=multi-user.target
+
+
