@@ -10,8 +10,6 @@ WorkingDirectory=/var/lib/sia/
 ExecStart=/usr/bin/siad 
 Restart=on-failure
 RestartSec=30
-#CPUQuota=50%
-#MemoryLimit=7G
 
 [Install]
 WantedBy=multi-user.target
