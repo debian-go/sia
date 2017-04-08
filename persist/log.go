@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"path/filepath"
 
 	"github.com/NebulousLabs/Sia/build"
 )
@@ -120,7 +119,7 @@ func (cf *closeableFile) Write(b []byte) (int, error) {
 // NewFileLogger returns a logger that logs to logFilename. The file is opened
 // in append mode, and created if it does not exist.
 func NewFileLogger(logFilename string) (*Logger, error) {
-	logFile, err := os.OpenFile(filepath.Join("/var/log/sia", filepath.Base(logFilename)), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0660)
+	logFile, err := os.OpenFile(logFilename, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0660)
 	if err != nil {
 		return nil, err
 	}
