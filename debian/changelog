@@ -1,3 +1,9 @@
+sia (1.1.2-1) UNRELEASED; urgency=medium
+
+  * New upstream version 1.1.2
+
+ -- Bjorn Dolk <debian@bjorndolk.com>  Sat, 08 Apr 2017 21:55:35 +0200
+
 sia (1.0.4-2) unstable; urgency=medium
 
   * Added system-d config
