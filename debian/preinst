@@ -1,3 +1,4 @@
 #!/bin/bash
 adduser --system --home /var/lib/sia  sia
-
+mkdir -p /var/log/sia
+chown sia /var/log/sia
