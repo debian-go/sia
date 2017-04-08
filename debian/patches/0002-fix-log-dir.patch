@@ -2,7 +2,15 @@ Index: sia/persist/log.go
 ===================================================================
 --- sia.orig/persist/log.go
 +++ sia/persist/log.go
-@@ -119,7 +119,7 @@ func (cf *closeableFile) Write(b []byte)
+@@ -6,6 +6,7 @@ import (
+ 	"log"
+ 	"os"
+ 	"sync"
++	"path/filepath"
+ 
+ 	"github.com/NebulousLabs/Sia/build"
+ )
+@@ -119,7 +120,7 @@ func (cf *closeableFile) Write(b []byte)
  // NewFileLogger returns a logger that logs to logFilename. The file is opened
  // in append mode, and created if it does not exist.
  func NewFileLogger(logFilename string) (*Logger, error) {
