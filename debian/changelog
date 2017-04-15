@@ -1,6 +1,7 @@
-sia (1.1.2-2) UNRELEASED; urgency=medium
+sia (1.1.2-2) unstable; urgency=medium
 
   * Build with golang 1.8 instead of 1.7 
+  * 
 
  -- Bjorn Dolk <debian@bjorndolk.com>  Sun, 09 Apr 2017 21:53:29 +0200
 
