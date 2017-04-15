@@ -1,3 +1,9 @@
+sia (1.1.2-3) unstable; urgency=medium
+
+  * Added watch file 
+
+ -- Bjorn Dolk <debian@bjorndolk.com>  Sat, 15 Apr 2017 20:11:02 +0200
+
 sia (1.1.2-2) unstable; urgency=medium
 
   * Build with golang 1.8 instead of 1.7 
