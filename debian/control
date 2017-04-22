@@ -3,7 +3,7 @@ Section: devel
 Priority: extra
 Maintainer: Debian Go Packaging Team <pkg-go-maintainers@lists.alioth.debian.org>
 Uploaders: Free Ekanayaka <freee@debian.org>, Bjorn Dolk <debian@bjorndolk.com>
-Build-Depends: debhelper (>= 9.20160709~),
+Build-Depends: debhelper (>= 10),
                dh-golang,
                golang-1.8-go,
                golang-github-bgentry-speakeasy-dev,
