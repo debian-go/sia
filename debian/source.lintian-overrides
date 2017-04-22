@@ -1,1 +1,1 @@
-sia : init.d-script-not-included-in-package
+sia source: init.d-script-not-included-in-package
