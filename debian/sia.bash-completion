@@ -1,3 +1,4 @@
+# -*- shell-script -*-
 # bash completion for siac                                 -*- shell-script -*-
 
 __debug()
