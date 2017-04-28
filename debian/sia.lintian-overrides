@@ -1,3 +1,0 @@
-#Only intend to provide system-d support
-sia: init.d-script-not-included-in-package
-sia: init.d-script-not-marked-as-conffile 
