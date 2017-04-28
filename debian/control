@@ -1,5 +1,5 @@
 Source: sia
-Section: devel
+Section: net
 Priority: extra
 Maintainer: Debian Go Packaging Team <pkg-go-maintainers@lists.alioth.debian.org>
 Uploaders: Free Ekanayaka <freee@debian.org>, Bjorn Dolk <debian@bjorndolk.com>
