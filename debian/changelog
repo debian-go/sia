@@ -5,7 +5,7 @@ sia (1.1.2-4) UNRELEASED; urgency=medium
   * Added manpages for siac
   * Added logdir to debian/dirs 
   * Added logrotate 
-  * Excact version of muxido for stabillity
+  * Exact version of muxido for stabillity
 
  -- Bjorn Dolk <debian@bjorndolk.com>  Fri, 28 Apr 2017 08:22:19 +0200
 
