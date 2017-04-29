@@ -1,0 +1,6 @@
+/var/log/sia/*log {
+        daily
+        copytruncate
+        rotate 14
+        compress
+}

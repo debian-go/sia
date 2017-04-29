@@ -4,6 +4,7 @@ sia (1.1.2-4) UNRELEASED; urgency=medium
   * Change section to net (Closes: #855271) 
   * Added manpages for siac
   * Added logdir to debian/dirs 
+  * Added logrotate 
 
  -- Bjorn Dolk <debian@bjorndolk.com>  Fri, 28 Apr 2017 08:22:19 +0200
 
