@@ -1,3 +1,10 @@
+From: Bjorn Dolk <debian@bjorndolk.com>
+Date: Sun, 14 May 2017 10:57:01 +0000
+Subject: fix-log-dir
+
+Patch logs to be written in /var/log
+---
+
 Index: sia/persist/log.go
 ===================================================================
 --- sia.orig/persist/log.go
