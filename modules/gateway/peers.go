@@ -10,7 +10,7 @@ import (
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
-	"github.com/inconshreveable/muxado"
+	"github.com/NebulousLabs/muxado"
 )
 
 var (
