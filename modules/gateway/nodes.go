@@ -5,9 +5,9 @@ import (
 	"net"
 	"time"
 
-	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
+	"github.com/NebulousLabs/fastrand"
 )
 
 var (
@@ -74,10 +74,7 @@ func (g *Gateway) randomNode() (modules.NetAddress, error) {
 	// every node on the network. If the network gets large, this algorithm
 	// will either need to be refactored, or more likely a cap on the size of
 	// g.nodes will need to be added.
-	r, err := crypto.RandIntn(len(g.nodes))
-	if err != nil {
-		return "", err
-	}
+	r := fastrand.Intn(len(g.nodes))
 	for node := range g.nodes {
 		if r <= 0 {
 			return node, nil
@@ -91,6 +88,7 @@ func (g *Gateway) randomNode() (modules.NetAddress, error) {
 // randomly selected nodes to the caller.
 func (g *Gateway) shareNodes(conn modules.PeerConn) error {
 	conn.SetDeadline(time.Now().Add(connStdDeadline))
+	remoteNA := modules.NetAddress(conn.RemoteAddr().String())
 
 	// Assemble a list of nodes to send to the peer.
 	var nodes []modules.NetAddress
@@ -98,34 +96,26 @@ func (g *Gateway) shareNodes(conn modules.PeerConn) error {
 		g.mu.RLock()
 		defer g.mu.RUnlock()
 
-		// Create a random permutation of nodes from the gateway to iterate
-		// through.
+		// Gather candidates for sharing.
 		gnodes := make([]modules.NetAddress, 0, len(g.nodes))
 		for node := range g.nodes {
-			gnodes = append(gnodes, node)
-		}
-		perm, err := crypto.Perm(len(g.nodes))
-		if err != nil {
-			g.log.Severe("Unable to get random permutation for sharing nodes")
-		}
-
-		// Iterate through the random permutation of nodes and select the
-		// desirable ones.
-		remoteNA := modules.NetAddress(conn.RemoteAddr().String())
-		for _, i := range perm {
 			// Don't share local peers with remote peers. That means that if 'node'
 			// is loopback, it will only be shared if the remote peer is also
 			// loopback. And if 'node' is private, it will only be shared if the
 			// remote peer is either the loopback or is also private.
-			node := gnodes[i]
 			if node.IsLoopback() && !remoteNA.IsLoopback() {
 				continue
 			}
 			if node.IsLocal() && !remoteNA.IsLocal() {
 				continue
 			}
+			gnodes = append(gnodes, node)
+		}
 
-			nodes = append(nodes, node)
+		// Iterate through the random permutation of nodes and select the
+		// desirable ones.
+		for _, i := range fastrand.Perm(len(gnodes)) {
+			nodes = append(nodes, gnodes[i])
 			if uint64(len(nodes)) == maxSharedNodes {
 				break
 			}
@@ -150,9 +140,9 @@ func (g *Gateway) requestNodes(conn modules.PeerConn) error {
 			g.log.Printf("WARN: peer '%v' sent the invalid addr '%v'", conn.RPCAddr(), node)
 		}
 	}
-	err := g.save()
+	err := g.saveSync()
 	if err != nil {
-		g.log.Println("WARN: failed to save nodelist after requesting nodes:", err)
+		g.log.Println("ERROR: unable to save new nodes added to the gateway:", err)
 	}
 	g.mu.Unlock()
 	return nil
@@ -167,7 +157,7 @@ func (g *Gateway) permanentNodePurger(closeChan chan struct{}) {
 	for {
 		// Choose an amount of time to wait before attempting to prune a node.
 		// Nodes will occasionally go offline for some time, which can even be
-		// days. We don't want to too aggressivley prune nodes with low-moderate
+		// days. We don't want to too aggressively prune nodes with low-moderate
 		// uptime, as they are still useful to the network.
 		//
 		// But if there are a lot of nodes, we want to make sure that the node
@@ -177,7 +167,7 @@ func (g *Gateway) permanentNodePurger(closeChan chan struct{}) {
 		//
 		// This value is a ratelimit which tries to keep the nodes list in the
 		// gateawy healthy. A more complex algorithm might adjust this number
-		// according to the percentage of prune attemtps that are successful
+		// according to the percentage of prune attempts that are successful
 		// (decrease prune frequency if most nodes in the database are online,
 		// increase prune frequency if more nodes in the database are offline).
 		waitTime := nodePurgeDelay
@@ -236,7 +226,6 @@ func (g *Gateway) permanentNodePurger(closeChan chan struct{}) {
 		if err != nil {
 			g.mu.Lock()
 			g.removeNode(node)
-			g.save()
 			g.mu.Unlock()
 			g.log.Debugf("INFO: removing node %q because it could not be reached during a random scan: %v", node, err)
 		}

@@ -20,6 +20,7 @@ import (
 	"github.com/NebulousLabs/Sia/modules/transactionpool"
 	modWallet "github.com/NebulousLabs/Sia/modules/wallet"
 	"github.com/NebulousLabs/Sia/types"
+	"github.com/NebulousLabs/fastrand"
 )
 
 // newTestingWallet is a helper function that creates a ready-to-use wallet
@@ -29,10 +30,7 @@ func newTestingWallet(testdir string, cs modules.ConsensusSet, tp modules.Transa
 	if err != nil {
 		return nil, err
 	}
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	if !w.Encrypted() {
 		_, err = w.Encrypt(key)
 		if err != nil {
@@ -82,7 +80,7 @@ func newTestingHost(testdir string, cs modules.ConsensusSet, tp modules.Transact
 	if err != nil {
 		return nil, err
 	}
-	err = h.AddStorageFolder(storageFolder, 1e6)
+	err = h.AddStorageFolder(storageFolder, modules.SectorSize*64)
 	if err != nil {
 		return nil, err
 	}
@@ -126,10 +124,7 @@ func newTestingTrio(name string) (modules.Host, *Contractor, modules.TestMiner, 
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	if !w.Encrypted() {
 		_, err = w.Encrypt(key)
 		if err != nil {
@@ -233,14 +228,11 @@ func TestIntegrationReviseContract(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	_, err = editor.Upload(data)
 	if err != nil {
 		t.Fatal(err)
@@ -282,14 +274,11 @@ func TestIntegrationUploadDownload(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	root, err := editor.Upload(data)
 	if err != nil {
 		t.Fatal(err)
@@ -300,7 +289,7 @@ func TestIntegrationUploadDownload(t *testing.T) {
 	}
 
 	// download the data
-	downloader, err := c.Downloader(contract.ID)
+	downloader, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,14 +335,11 @@ func TestIntegrationDelete(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	_, err = editor.Upload(data)
 	if err != nil {
 		t.Fatal(err)
@@ -367,7 +353,7 @@ func TestIntegrationDelete(t *testing.T) {
 	c.mu.Unlock()
 
 	// delete the sector
-	editor, err = c.Editor(contract.ID)
+	editor, err = c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,14 +396,11 @@ func TestIntegrationInsertDelete(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	// insert the sector
 	_, err = editor.Upload(data)
 	if err != nil {
@@ -469,14 +452,11 @@ func TestIntegrationModify(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	// insert the sector
 	_, err = editor.Upload(data)
 	if err != nil {
@@ -492,7 +472,7 @@ func TestIntegrationModify(t *testing.T) {
 	offset, newData := uint64(10), []byte{1, 2, 3, 4, 5}
 	copy(data[offset:], newData)
 	newRoot := crypto.MerkleRoot(data)
-	editor, err = c.Editor(contract.ID)
+	editor, err = c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,14 +517,11 @@ func TestIntegrationRenew(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	// insert the sector
 	root, err := editor.Upload(data)
 	if err != nil {
@@ -581,7 +558,7 @@ func TestIntegrationRenew(t *testing.T) {
 	}
 
 	// download the renewed contract
-	downloader, err := c.Downloader(contract.ID)
+	downloader, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,14 +592,11 @@ func TestIntegrationRenew(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err = c.Editor(contract.ID)
+	editor, err = c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err = crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data = fastrand.Bytes(int(modules.SectorSize))
 	// insert the sector
 	_, err = editor.Upload(data)
 	if err != nil {
@@ -665,14 +639,11 @@ func TestIntegrationResync(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	root, err := editor.Upload(data)
 	if err != nil {
 		t.Fatal(err)
@@ -683,7 +654,7 @@ func TestIntegrationResync(t *testing.T) {
 	}
 
 	// download the data
-	downloader, err := c.Downloader(contract.ID)
+	downloader, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -713,7 +684,7 @@ func TestIntegrationResync(t *testing.T) {
 	c.mu.Unlock()
 
 	// Editor should fail with the bad contract
-	_, err = c.Editor(badContract.ID)
+	_, err = c.Editor(badContract.ID, nil)
 	if !proto.IsRevisionMismatch(err) {
 		t.Fatal("expected revision mismatch, got", err)
 	}
@@ -725,13 +696,13 @@ func TestIntegrationResync(t *testing.T) {
 	c.mu.Unlock()
 
 	// Editor and Downloader should now succeed after loading the cachedRevision
-	editor, err = c.Editor(badContract.ID)
+	editor, err = c.Editor(badContract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	editor.Close()
 
-	downloader, err = c.Downloader(badContract.ID)
+	downloader, err = c.Downloader(badContract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,7 +721,7 @@ func TestIntegrationResync(t *testing.T) {
 	c.mu.Unlock()
 
 	// Editor should fail with the bad contract
-	_, err = c.Editor(badContract.ID)
+	_, err = c.Editor(badContract.ID, nil)
 	if !proto.IsRevisionMismatch(err) {
 		t.Fatal("expected revision mismatch, got", err)
 	}
@@ -761,7 +732,7 @@ func TestIntegrationResync(t *testing.T) {
 	c.mu.Unlock()
 
 	// should be able to upload after loading the cachedRevision
-	editor, err = c.Editor(badContract.ID)
+	editor, err = c.Editor(badContract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -804,13 +775,13 @@ func TestIntegrationDownloaderCaching(t *testing.T) {
 	c.mu.Unlock()
 
 	// create a downloader
-	d1, err := c.Downloader(contract.ID)
+	d1, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// create another downloader
-	d2, err := c.Downloader(contract.ID)
+	d2, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,7 +803,7 @@ func TestIntegrationDownloaderCaching(t *testing.T) {
 	}
 
 	// create another downloader
-	d3, err := c.Downloader(contract.ID)
+	d3, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +825,7 @@ func TestIntegrationDownloaderCaching(t *testing.T) {
 	}
 
 	// create another downloader
-	d4, err := c.Downloader(contract.ID)
+	d4, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -898,13 +869,13 @@ func TestIntegrationEditorCaching(t *testing.T) {
 	c.mu.Unlock()
 
 	// create an editor
-	d1, err := c.Editor(contract.ID)
+	d1, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// create another editor
-	d2, err := c.Editor(contract.ID)
+	d2, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -926,7 +897,7 @@ func TestIntegrationEditorCaching(t *testing.T) {
 	}
 
 	// create another editor
-	d3, err := c.Editor(contract.ID)
+	d3, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -948,7 +919,7 @@ func TestIntegrationEditorCaching(t *testing.T) {
 	}
 
 	// create another editor
-	d4, err := c.Editor(contract.ID)
+	d4, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -991,14 +962,11 @@ func TestIntegrationCachedRenew(t *testing.T) {
 	c.mu.Unlock()
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	root, err := editor.Upload(data)
 	if err != nil {
 		t.Fatal(err)
@@ -1009,7 +977,7 @@ func TestIntegrationCachedRenew(t *testing.T) {
 	}
 
 	// download the data
-	downloader, err := c.Downloader(contract.ID)
+	downloader, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

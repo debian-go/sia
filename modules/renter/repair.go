@@ -15,11 +15,6 @@ import (
 	"github.com/NebulousLabs/Sia/types"
 )
 
-// TODO: Move to a consts file.
-const uploadFailureCooldown = time.Second * 61 // Prime to avoid intersecting with regular events.
-const maxConsecutivePenalty = 10               // Limit the number of doublings to prevent overflows.
-const minPiecesRepair = 5
-
 var (
 	// errFileDeleted indicates that a chunk which is trying to be repaired
 	// cannot be found in the renter.
@@ -209,7 +204,7 @@ func (r *Renter) managedRepairIteration(rs *repairState) {
 		// time scales exponentially as the number of consecutive failures grow,
 		// stopping at 10 doublings, or about 17 hours total cooldown.
 		penalty := uint64(worker.consecutiveUploadFailures)
-		if worker.consecutiveUploadFailures > maxConsecutivePenalty {
+		if worker.consecutiveUploadFailures > time.Duration(maxConsecutivePenalty) {
 			penalty = uint64(maxConsecutivePenalty)
 		}
 		if time.Since(worker.recentUploadFailure) < uploadFailureCooldown*(1<<penalty) {
@@ -350,10 +345,7 @@ func (r *Renter) managedScheduleChunkRepair(rs *repairState, chunkID chunkID, ch
 	// Encrypt the missing pieces.
 	for _, missingPiece := range missingPieces {
 		key := deriveKey(file.masterKey, chunkIndex, uint64(missingPiece))
-		pieces[missingPiece], err = key.EncryptBytes(pieces[missingPiece])
-		if err != nil {
-			return build.ExtendErr("unable to encrypt chunk pieces", err)
-		}
+		pieces[missingPiece] = key.EncryptBytes(pieces[missingPiece])
 	}
 
 	// Give each piece to a worker in the set of useful workers.
@@ -475,7 +467,7 @@ func (r *Renter) threadedQueueRepairs() {
 		// Chill out for an extra 15 minutes before going through the files
 		// again.
 		select {
-		case <-time.After(time.Minute * 15):
+		case <-time.After(repairQueueInterval):
 		case <-r.tg.StopChan():
 			return
 		}

@@ -111,6 +111,8 @@ type HostDBScan struct {
 // results provided by this struct can only be used as a guide, and may vary
 // significantly from machine to machine.
 type HostScoreBreakdown struct {
+	Score types.Currency `json:"score"`
+
 	AgeAdjustment              float64 `json:"ageadjustment"`
 	BurnAdjustment             float64 `json:"burnadjustment"`
 	CollateralAdjustment       float64 `json:"collateraladjustment"`
@@ -120,7 +122,7 @@ type HostScoreBreakdown struct {
 	VersionAdjustment          float64 `json:"versionadjustment"`
 }
 
-// RenterPriceEstimation contains a bunch of fileds estimating the costs of
+// RenterPriceEstimation contains a bunch of files estimating the costs of
 // various operations on the network.
 type RenterPriceEstimation struct {
 	// The cost of downloading 1 TB of data.
@@ -188,7 +190,7 @@ func (mrs *MerkleRootSet) UnmarshalJSON(b []byte) error {
 }
 
 // A RenterContract contains all the metadata necessary to revise or renew a
-// file contract.
+// file contract. See `api.RenterContract` for field information.
 type RenterContract struct {
 	FileContract    types.FileContract         `json:"filecontract"`
 	HostPublicKey   types.SiaPublicKey         `json:"hostpublickey"`

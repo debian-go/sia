@@ -1,8 +1,11 @@
 package host
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/NebulousLabs/Sia/modules"
 )
 
 // blockingPortForward is a dependency set that causes the host port forward
@@ -56,58 +59,64 @@ func TestPortForwardBlocking(t *testing.T) {
 	time.Sleep(time.Second * 4)
 }
 
-/*
-import (
-	"path/filepath"
-	"sync/atomic"
-	"testing"
-
-	"github.com/NebulousLabs/Sia/modules"
-)
-
-// TestRPCMetrics checks that the rpc tracking is counting incoming RPC cals.
-func TestRPCMetrics(t *testing.T) {
+// TestHostWorkingStatus checks that the host properly updates its working
+// state
+func TestHostWorkingStatus(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	ht, err := newHostTester("TestRPCMetrics")
+	t.Parallel()
+	ht, err := newHostTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
-	}
-	defer ht.Close()
-
-	// Upload a test file to get some metrics to increment.
-	_, err = ht.uploadFile("TestRPCMetrics - 1", renewDisabled)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if atomic.LoadUint64(&ht.host.atomicReviseCalls) != 1 {
-		t.Error("expected to count a revise call")
-	}
-	if atomic.LoadUint64(&ht.host.atomicSettingsCalls) != 1 {
-		t.Error("expected to count a settings call")
-	}
-	if atomic.LoadUint64(&ht.host.atomicUploadCalls) != 1 {
-		t.Error("expected to count an upload call")
 	}
 
-	// Restart the host and check that the counts persist.
-	err = ht.host.Close()
-	if err != nil {
-		t.Fatal(err)
+	if ht.host.WorkingStatus() != modules.HostWorkingStatusChecking {
+		t.Fatal("expected working state to initially be modules.HostWorkingStatusChecking")
 	}
-	rebootHost, err := New(ht.cs, ht.tpool, ht.wallet, "localhost:0", filepath.Join(ht.persistDir, modules.HostDir))
-	if err != nil {
-		t.Fatal(err)
+
+	// Simulate some setting calls, and see if the host picks up on it.
+	atomic.AddUint64(&ht.host.atomicSettingsCalls, workingStatusThreshold+1)
+	time.Sleep(workingStatusFirstCheck + time.Second)
+	if ht.host.WorkingStatus() != modules.HostWorkingStatusWorking {
+		t.Fatal("expected host working status to be modules.HostWorkingStatusWorking after incrementing status calls")
 	}
-	if atomic.LoadUint64(&rebootHost.atomicReviseCalls) != 1 {
-		t.Error("expected to count a revise call")
+
+	// No more settings calls, host should believe it is not working now.
+	time.Sleep(workingStatusFrequency + time.Second)
+	if ht.host.WorkingStatus() != modules.HostWorkingStatusNotWorking {
+		t.Fatal("expected host working status to be modules.HostWorkingStatusNotWorking after waiting workingStatusFrequency with no settings calls")
 	}
-	if atomic.LoadUint64(&rebootHost.atomicSettingsCalls) != 1 {
-		t.Error("expected to count a settings call")
+
+	// Simulate some setting calls, and see if the host picks up on it.
+	atomic.AddUint64(&ht.host.atomicSettingsCalls, workingStatusThreshold+1)
+	time.Sleep(workingStatusFirstCheck + time.Second)
+	if ht.host.WorkingStatus() != modules.HostWorkingStatusNotWorking {
+		t.Fatal("expected host working status to be modules.HostWorkingStatusWorking after incrementing status calls")
 	}
-	if atomic.LoadUint64(&rebootHost.atomicUploadCalls) != 1 {
-		t.Error("expected to count an upload call")
+	time.Sleep(workingStatusFrequency - workingStatusFirstCheck)
+	if ht.host.WorkingStatus() != modules.HostWorkingStatusWorking {
+		t.Fatal("expected host working status to be modules.HostWorkingStatusWorking after incrementing status calls")
 	}
 }
-*/
+
+// TestHostConnectabilityStatus checks that the host properly updates its connectable
+// state
+func TestHostConnectabilityStatus(t *testing.T) {
+	if testing.Short() {
+		t.SkipNow()
+	}
+	t.Parallel()
+	ht, err := newHostTester(t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if ht.host.ConnectabilityStatus() != modules.HostConnectabilityStatusChecking {
+		t.Fatal("expected connectability state to initially be ConnectablityStateChecking")
+	}
+	time.Sleep(connectabilityCheckFirstWait + time.Second)
+	if ht.host.ConnectabilityStatus() != modules.HostConnectabilityStatusConnectable {
+		t.Fatal("expected connectability state to be modules.HostConnectabilityStatusConnectable")
+	}
+}

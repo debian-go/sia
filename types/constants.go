@@ -53,7 +53,7 @@ func init() {
 		BlockFrequency = 12                      // 12 seconds: slow enough for developers to see ~each block, fast enough that blocks don't waste time.
 		MaturityDelay = 10                       // 60 seconds before a delayed output matures.
 		GenesisTimestamp = Timestamp(1424139000) // Change as necessary.
-		RootTarget = Target{0, 0, 10}            // Standard developer CPUs will be able to mine blocks with the race library activated.
+		RootTarget = Target{0, 0, 2}             // Standard developer CPUs will be able to mine blocks with the race library activated.
 
 		TargetWindow = 20                        // Difficulty is adjusted based on prior 20 blocks.
 		MaxAdjustmentUp = big.NewRat(120, 100)   // Difficulty adjusts quickly.
@@ -137,7 +137,7 @@ func init() {
 		GenesisTimestamp = Timestamp(1433600000) // June 6th, 2015 @ 2:13pm UTC.
 
 		// The RootTarget was set such that the developers could reasonable
-		// premine 100 blocks in a day. It was known to the developrs at launch
+		// premine 100 blocks in a day. It was known to the developers at launch
 		// this this was at least one and perhaps two orders of magnitude too
 		// small.
 		RootTarget = Target{0, 0, 0, 0, 32}
@@ -147,7 +147,7 @@ func init() {
 		// of miners to attack the network using rogue timestamps.
 		TargetWindow = 1e3
 
-		// The difficutly adjustment is clamped to 2.5x every 500 blocks. This
+		// The difficulty adjustment is clamped to 2.5x every 500 blocks. This
 		// corresponds to 6.25x every 2 weeks, which can be compared to
 		// Bitcoin's clamp of 4x every 2 weeks. The difficulty clamp is
 		// primarily to stop difficulty raising attacks. Sia's safety margin is

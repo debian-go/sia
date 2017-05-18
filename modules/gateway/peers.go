@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/NebulousLabs/Sia/build"
-	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
+	"github.com/NebulousLabs/fastrand"
 	"github.com/NebulousLabs/muxado"
 )
 
@@ -77,11 +77,7 @@ func (g *Gateway) randomOutboundPeer() (modules.NetAddress, error) {
 	}
 
 	// Of the remaining options, select one at random.
-	r, err := crypto.RandIntn(len(addrs))
-	if err != nil {
-		g.log.Severe("Random number generation failure:", err)
-	}
-	return addrs[r], nil
+	return addrs[fastrand.Intn(len(addrs))], nil
 }
 
 // permanentListen handles incoming connection requests. If the connection is
@@ -168,7 +164,7 @@ func (g *Gateway) managedAcceptConnOldPeer(conn net.Conn, remoteVersion string) 
 		sess: muxado.Server(conn),
 	})
 	g.addNode(addr)
-	return g.save()
+	return nil
 }
 
 // managedAcceptConnNewPeer accepts connection requests from peers >= v1.0.0.
@@ -210,7 +206,6 @@ func (g *Gateway) managedAcceptConnNewPeer(conn net.Conn, remoteVersion string) 
 		if err == nil {
 			g.mu.Lock()
 			g.addNode(remoteAddr)
-			g.save()
 			g.mu.Unlock()
 		}
 	}()
@@ -230,9 +225,9 @@ func (g *Gateway) acceptPeer(p *peer) {
 	// Select a peer to kick. Outbound peers and local peers are not
 	// available to be kicked.
 	var addrs []modules.NetAddress
-	for addr := range g.peers {
+	for addr, peer := range g.peers {
 		// Do not kick outbound peers or local peers.
-		if !p.Inbound || p.Local {
+		if !peer.Inbound || peer.Local {
 			continue
 		}
 
@@ -250,11 +245,8 @@ func (g *Gateway) acceptPeer(p *peer) {
 	}
 
 	// Of the remaining options, select one at random.
-	r, err := crypto.RandIntn(len(addrs))
-	if err != nil {
-		g.log.Severe("random number generation failure:", err)
-	}
-	kick := addrs[r]
+	kick := addrs[fastrand.Intn(len(addrs))]
+
 	g.peers[kick].sess.Close()
 	delete(g.peers, kick)
 	g.log.Printf("INFO: disconnected from %v to make room for %v\n", kick, p.NetAddress)
@@ -374,7 +366,12 @@ func (g *Gateway) managedConnectOldPeer(conn net.Conn, remoteVersion string, rem
 	// about duplicates and we have already validated the address by
 	// connecting to it.
 	g.addNode(remoteAddr)
-	return g.save()
+	// We want to persist the outbound peers.
+	err := g.saveSync()
+	if err != nil {
+		g.log.Println("ERROR: Unable to save new outbound peer to gateway:", err)
+	}
+	return nil
 }
 
 // managedConnectNewPeer connects to peers >= v1.0.0. The peer is added as a
@@ -406,7 +403,12 @@ func (g *Gateway) managedConnectNewPeer(conn net.Conn, remoteVersion string, rem
 	// about duplicates and we have already validated the address by
 	// connecting to it.
 	g.addNode(remoteAddr)
-	return g.save()
+	// We want to persist the outbound peers.
+	err = g.saveSync()
+	if err != nil {
+		g.log.Println("ERROR: Unable to save new outbound peer to gateway:", err)
+	}
+	return nil
 }
 
 // managedConnect establishes a persistent connection to a peer, and adds it to

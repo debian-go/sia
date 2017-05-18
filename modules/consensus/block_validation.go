@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
+	"github.com/NebulousLabs/Sia/persist"
 	"github.com/NebulousLabs/Sia/types"
 )
 
@@ -21,7 +21,7 @@ var (
 type blockValidator interface {
 	// ValidateBlock validates a block against a minimum timestamp, a block
 	// target, and a block height.
-	ValidateBlock(types.Block, types.Timestamp, types.Target, types.BlockHeight) error
+	ValidateBlock(types.Block, types.Timestamp, types.Target, types.BlockHeight, *persist.Logger) error
 }
 
 // stdBlockValidator is the standard implementation of blockValidator.
@@ -30,14 +30,14 @@ type stdBlockValidator struct {
 	clock types.Clock
 
 	// marshaler encodes and decodes between objects and byte slices.
-	marshaler encoding.GenericMarshaler
+	marshaler marshaler
 }
 
 // NewBlockValidator creates a new stdBlockValidator with default settings.
 func NewBlockValidator() stdBlockValidator {
 	return stdBlockValidator{
 		clock:     types.StdClock{},
-		marshaler: encoding.StdGenericMarshaler{},
+		marshaler: stdMarshaler{},
 	}
 }
 
@@ -64,7 +64,7 @@ func checkTarget(b types.Block, target types.Target) bool {
 // ValidateBlock validates a block against a minimum timestamp, a block target,
 // and a block height. Returns nil if the block is valid and an appropriate
 // error otherwise.
-func (bv stdBlockValidator) ValidateBlock(b types.Block, minTimestamp types.Timestamp, target types.Target, height types.BlockHeight) error {
+func (bv stdBlockValidator) ValidateBlock(b types.Block, minTimestamp types.Timestamp, target types.Target, height types.BlockHeight, log *persist.Logger) error {
 	// Check that the timestamp is not too far in the past to be acceptable.
 	if minTimestamp > b.Timestamp {
 		return errEarlyTimestamp
@@ -76,7 +76,8 @@ func (bv stdBlockValidator) ValidateBlock(b types.Block, minTimestamp types.Time
 	}
 
 	// Check that the block is below the size limit.
-	if uint64(len(bv.marshaler.Marshal(b))) > types.BlockSizeLimit {
+	blockSize := len(bv.marshaler.Marshal(b))
+	if uint64(blockSize) > types.BlockSizeLimit {
 		return errLargeBlock
 	}
 
@@ -98,6 +99,10 @@ func (bv stdBlockValidator) ValidateBlock(b types.Block, minTimestamp types.Time
 	// performing if the payouts are incorrect.
 	if b.Timestamp > bv.clock.Now()+types.FutureThreshold {
 		return errFutureTimestamp
+	}
+
+	if log != nil {
+		log.Debugf("validated block at height %v, block size: %vB", height, blockSize)
 	}
 	return nil
 }

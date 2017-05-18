@@ -98,7 +98,7 @@ func (f *file) UnmarshalSia(r io.Reader) error {
 	// COMPATv0.4.3 - decode bytesUploaded and chunksUploaded into dummy vars.
 	var bytesUploaded, chunksUploaded uint64
 
-	// decode easy fields
+	// Decode easy fields.
 	err := dec.DecodeAll(
 		&f.name,
 		&f.size,
@@ -112,7 +112,7 @@ func (f *file) UnmarshalSia(r io.Reader) error {
 		return err
 	}
 
-	// decode erasure coder
+	// Decode erasure coder.
 	var codeType string
 	if err := dec.Decode(&codeType); err != nil {
 		return err
@@ -136,7 +136,7 @@ func (f *file) UnmarshalSia(r io.Reader) error {
 		return errors.New("unrecognized erasure code type: " + codeType)
 	}
 
-	// decode contracts
+	// Decode contracts.
 	var nContracts uint64
 	if err := dec.Decode(&nContracts); err != nil {
 		return err
@@ -175,15 +175,7 @@ func (r *Renter) saveFile(f *file) error {
 	}
 
 	// Commit the SafeFile.
-	return handle.Commit()
-}
-
-// save stores the current renter data to disk.
-func (r *Renter) save() error {
-	data := struct {
-		Tracking map[string]trackedFile
-	}{r.tracking}
-	return persist.SaveFile(saveMetadata, data, filepath.Join(r.persistDir, PersistFilename))
+	return handle.CommitSync()
 }
 
 // saveSync stores the current renter data to disk and then syncs to disk.
@@ -191,7 +183,7 @@ func (r *Renter) saveSync() error {
 	data := struct {
 		Tracking map[string]trackedFile
 	}{r.tracking}
-	return persist.SaveFileSync(saveMetadata, data, filepath.Join(r.persistDir, PersistFilename))
+	return persist.SaveJSON(saveMetadata, data, filepath.Join(r.persistDir, PersistFilename))
 }
 
 // load fetches the saved renter data from disk.
@@ -236,7 +228,7 @@ func (r *Renter) load() error {
 		Tracking  map[string]trackedFile
 		Repairing map[string]string // COMPATv0.4.8
 	}{}
-	err = persist.LoadFile(saveMetadata, &data, filepath.Join(r.persistDir, PersistFilename))
+	err = persist.LoadJSON(saveMetadata, &data, filepath.Join(r.persistDir, PersistFilename))
 	if err != nil {
 		return err
 	}

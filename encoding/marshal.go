@@ -22,13 +22,6 @@ var (
 )
 
 type (
-	// GenericMarshaler marshals objects into byte slices and unmarshals byte
-	// slices into objects.
-	GenericMarshaler interface {
-		Marshal(interface{}) []byte
-		Unmarshal([]byte, interface{}) error
-	}
-
 	// A SiaMarshaler can encode and write itself to a stream.
 	SiaMarshaler interface {
 		MarshalSia(io.Writer) error
@@ -38,11 +31,6 @@ type (
 	SiaUnmarshaler interface {
 		UnmarshalSia(io.Reader) error
 	}
-
-	// StdGenericMarshaler is an implementation of GenericMarshaler that uses
-	// the encoding.Marshal and encoding.Unmarshal functions to perform
-	// its marshaling/unmarshaling.
-	StdGenericMarshaler struct{}
 
 	// An Encoder writes objects to an output stream.
 	Encoder struct {
@@ -103,12 +91,12 @@ func (e *Encoder) encode(val reflect.Value) error {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return e.write(EncInt64(val.Int()))
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return e.write(EncUint64(val.Uint()))
+		return WriteUint64(e.w, val.Uint())
 	case reflect.String:
 		return WritePrefix(e.w, []byte(val.String()))
 	case reflect.Slice:
 		// slices are variable length, so prepend the length and then fallthrough to array logic
-		if err := e.write(EncUint64(uint64(val.Len()))); err != nil {
+		if err := WriteInt(e.w, val.Len()); err != nil {
 			return err
 		}
 		if val.Len() == 0 {
@@ -368,17 +356,4 @@ func ReadFile(filename string, v interface{}) error {
 		return errors.New("error while reading " + filename + ": " + err.Error())
 	}
 	return nil
-}
-
-// Marshal returns the encoding of v. For encoding details, see the package
-// docstring.
-func (m StdGenericMarshaler) Marshal(v interface{}) []byte {
-	return Marshal(v)
-}
-
-// Unmarshal decodes the encoded value b and stores it in v, which must be a
-// pointer. The decoding rules are the inverse of those specified in the
-// package docstring for marshaling.
-func (m StdGenericMarshaler) Unmarshal(b []byte, v interface{}) error {
-	return Unmarshal(b, v)
 }

@@ -26,10 +26,12 @@ type (
 	// HostGET contains the information that is returned after a GET request to
 	// /host - a bunch of information about the status of the host.
 	HostGET struct {
-		ExternalSettings modules.HostExternalSettings `json:"externalsettings"`
-		FinancialMetrics modules.HostFinancialMetrics `json:"financialmetrics"`
-		InternalSettings modules.HostInternalSettings `json:"internalsettings"`
-		NetworkMetrics   modules.HostNetworkMetrics   `json:"networkmetrics"`
+		ExternalSettings     modules.HostExternalSettings     `json:"externalsettings"`
+		FinancialMetrics     modules.HostFinancialMetrics     `json:"financialmetrics"`
+		InternalSettings     modules.HostInternalSettings     `json:"internalsettings"`
+		NetworkMetrics       modules.HostNetworkMetrics       `json:"networkmetrics"`
+		ConnectabilityStatus modules.HostConnectabilityStatus `json:"connectabilitystatus"`
+		WorkingStatus        modules.HostWorkingStatus        `json:"workingstatus"`
 	}
 
 	// StorageGET contains the information that is returned after a GET request
@@ -43,9 +45,9 @@ type (
 // folderIndex determines the index of the storage folder with the provided
 // path.
 func folderIndex(folderPath string, storageFolders []modules.StorageFolderMetadata) (int, error) {
-	for i, sf := range storageFolders {
+	for _, sf := range storageFolders {
 		if sf.Path == folderPath {
-			return i, nil
+			return int(sf.Index), nil
 		}
 	}
 	return -1, errStorageFolderNotFound
@@ -58,11 +60,15 @@ func (api *API) hostHandlerGET(w http.ResponseWriter, req *http.Request, _ httpr
 	fm := api.host.FinancialMetrics()
 	is := api.host.InternalSettings()
 	nm := api.host.NetworkMetrics()
+	cs := api.host.ConnectabilityStatus()
+	ws := api.host.WorkingStatus()
 	hg := HostGET{
-		ExternalSettings: es,
-		FinancialMetrics: fm,
-		InternalSettings: is,
-		NetworkMetrics:   nm,
+		ExternalSettings:     es,
+		FinancialMetrics:     fm,
+		InternalSettings:     is,
+		NetworkMetrics:       nm,
+		ConnectabilityStatus: cs,
+		WorkingStatus:        ws,
 	}
 	WriteJSON(w, hg)
 }
@@ -263,7 +269,7 @@ func (api *API) storageFoldersResizeHandler(w http.ResponseWriter, req *http.Req
 		WriteError(w, Error{err.Error()}, http.StatusBadRequest)
 		return
 	}
-	err = api.host.ResizeStorageFolder(folderIndex, newSize)
+	err = api.host.ResizeStorageFolder(uint16(folderIndex), newSize, false)
 	if err != nil {
 		WriteError(w, Error{err.Error()}, http.StatusBadRequest)
 		return
@@ -288,7 +294,7 @@ func (api *API) storageFoldersRemoveHandler(w http.ResponseWriter, req *http.Req
 	}
 
 	force := req.FormValue("force") == "true"
-	err = api.host.RemoveStorageFolder(folderIndex, force)
+	err = api.host.RemoveStorageFolder(uint16(folderIndex), force)
 	if err != nil {
 		WriteError(w, Error{err.Error()}, http.StatusBadRequest)
 		return

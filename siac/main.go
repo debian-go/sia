@@ -16,16 +16,24 @@ import (
 	"github.com/NebulousLabs/Sia/build"
 )
 
-// flags
 var (
+	// Flags.
 	addr              string // override default API address
 	initPassword      bool   // supply a custom password when creating a wallet
+	initForce         bool   // destroy and reencrypt the wallet on init if it already exists
 	hostVerbose       bool   // display additional host info
 	renterShowHistory bool   // Show download history in addition to download queue.
 	renterListVerbose bool   // Show additional info about uploaded files.
+
+	// Globals.
+	rootCmd *cobra.Command // Root command cobra object, used by bash completion cmd.
+
+	// User-supplied password, cached so that we don't need to prompt multiple
+	// times.
+	apiPassword string
 )
 
-// exit codes
+// Exit codes.
 // inspired by sysexits.h
 const (
 	exitCodeGeneral = 1  // Not in sysexits.h, but is standard practice.
@@ -63,13 +71,17 @@ func apiGet(call string) (*http.Response, error) {
 	}
 	// check error code
 	if resp.StatusCode == http.StatusUnauthorized {
+		// retry request with authentication.
 		resp.Body.Close()
-		// Prompt for password and retry request with authentication.
-		password, err := speakeasy.Ask("API password: ")
-		if err != nil {
-			return nil, err
+		if apiPassword == "" {
+			// prompt for password and store it in a global var for subsequent
+			// calls
+			apiPassword, err = speakeasy.Ask("API password: ")
+			if err != nil {
+				return nil, err
+			}
 		}
-		resp, err = api.HttpGETAuthenticated("http://"+addr+call, password)
+		resp, err = api.HttpGETAuthenticated("http://"+addr+call, apiPassword)
 		if err != nil {
 			return nil, errors.New("no response from daemon - authentication failed")
 		}
@@ -227,6 +239,8 @@ func main() {
 		Run:   wrap(consensuscmd),
 	}
 
+	rootCmd = root
+
 	// create command tree
 	root.AddCommand(versionCmd)
 	root.AddCommand(stopCmd)
@@ -249,10 +263,12 @@ func main() {
 	minerCmd.AddCommand(minerStartCmd, minerStopCmd)
 
 	root.AddCommand(walletCmd)
-	walletCmd.AddCommand(walletAddressCmd, walletAddressesCmd, walletInitCmd,
-		walletLoadCmd, walletLockCmd, walletSeedsCmd, walletSendCmd,
+	walletCmd.AddCommand(walletAddressCmd, walletAddressesCmd, walletInitCmd, walletInitSeedCmd,
+		walletLoadCmd, walletLockCmd, walletSeedsCmd, walletSendCmd, walletSweepCmd,
 		walletBalanceCmd, walletTransactionsCmd, walletUnlockCmd)
 	walletInitCmd.Flags().BoolVarP(&initPassword, "password", "p", false, "Prompt for a custom password")
+	walletInitCmd.Flags().BoolVarP(&initForce, "force", "", false, "destroy the existing wallet and re-encrypt")
+	walletInitSeedCmd.Flags().BoolVarP(&initForce, "force", "", false, "destroy the existing wallet")
 	walletLoadCmd.AddCommand(walletLoad033xCmd, walletLoadSeedCmd, walletLoadSiagCmd)
 	walletSendCmd.AddCommand(walletSendSiacoinsCmd, walletSendSiafundsCmd)
 
@@ -262,6 +278,10 @@ func main() {
 		renterContractsCmd, renterFilesListCmd, renterFilesRenameCmd,
 		renterFilesUploadCmd, renterUploadsCmd, renterExportCmd,
 		renterPricesCmd)
+
+	renterContractsCmd.AddCommand(renterContractsViewCmd)
+	renterAllowanceCmd.AddCommand(renterAllowanceCancelCmd)
+
 	renterCmd.Flags().BoolVarP(&renterListVerbose, "verbose", "v", false, "Show additional file info such as redundancy")
 	renterDownloadsCmd.Flags().BoolVarP(&renterShowHistory, "history", "H", false, "Show download history in addition to the download queue")
 	renterFilesListCmd.Flags().BoolVarP(&renterListVerbose, "verbose", "v", false, "Show additional file info such as redundancy")
@@ -271,6 +291,8 @@ func main() {
 	gatewayCmd.AddCommand(gatewayConnectCmd, gatewayDisconnectCmd, gatewayAddressCmd, gatewayListCmd)
 
 	root.AddCommand(consensusCmd)
+
+	root.AddCommand(bashcomplCmd)
 
 	// parse flags
 	root.PersistentFlags().StringVarP(&addr, "addr", "a", "localhost:9980", "which host/port to communicate with (i.e. the host/port siad is listening on)")

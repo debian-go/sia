@@ -10,17 +10,17 @@ import (
 
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/modules"
-	"github.com/NebulousLabs/Sia/modules/host/storagemanager"
+	"github.com/NebulousLabs/Sia/modules/host/contractmanager"
 )
 
 var (
 	// Various folder sizes for testing host storage folder resizing.
 	// Must be provided as strings to the API call.
-	minFolderSizeString    = strconv.FormatUint(storagemanager.MinimumStorageFolderSize(), 10)
-	maxFolderSizeString    = strconv.FormatUint(storagemanager.MaximumStorageFolderSize(), 10)
-	tooSmallFolderString   = strconv.FormatUint(storagemanager.MinimumStorageFolderSize()-1, 10)
-	tooLargeFolderString   = strconv.FormatUint(storagemanager.MaximumStorageFolderSize()+1, 10)
-	mediumSizeFolderString = strconv.FormatUint(3*storagemanager.MinimumStorageFolderSize(), 10)
+	minFolderSizeString    = strconv.FormatUint(modules.SectorSize*contractmanager.MinimumSectorsPerStorageFolder, 10)
+	maxFolderSizeString    = strconv.FormatUint(modules.SectorSize*contractmanager.MaximumSectorsPerStorageFolder, 10)
+	tooSmallFolderString   = strconv.FormatUint(modules.SectorSize*(contractmanager.MinimumSectorsPerStorageFolder-1), 10)
+	tooLargeFolderString   = strconv.FormatUint(modules.SectorSize*(contractmanager.MaximumSectorsPerStorageFolder+1), 10)
+	mediumSizeFolderString = strconv.FormatUint(modules.SectorSize*contractmanager.MinimumSectorsPerStorageFolder*3, 10)
 
 	// Test cases for resizing a host's storage folder.
 	// Running all the invalid cases before the valid ones simplifies some
@@ -32,16 +32,118 @@ var (
 	}{
 		// invalid sizes
 		{"", 0, io.EOF},
-		{"0", 0, storagemanager.ErrSmallStorageFolder},
-		{tooSmallFolderString, storagemanager.MinimumStorageFolderSize() - 1, storagemanager.ErrSmallStorageFolder},
-		{tooLargeFolderString, storagemanager.MaximumStorageFolderSize() + 1, storagemanager.ErrLargeStorageFolder},
+		{"0", 0, contractmanager.ErrSmallStorageFolder},
+		{tooSmallFolderString, modules.SectorSize * (contractmanager.MinimumSectorsPerStorageFolder - 1), contractmanager.ErrSmallStorageFolder},
+		{tooLargeFolderString, modules.SectorSize * (contractmanager.MaximumSectorsPerStorageFolder + 1), contractmanager.ErrLargeStorageFolder},
 
 		// valid sizes
-		{minFolderSizeString, storagemanager.MinimumStorageFolderSize(), nil},
-		{maxFolderSizeString, storagemanager.MaximumStorageFolderSize(), nil},
-		{mediumSizeFolderString, 3 * storagemanager.MinimumStorageFolderSize(), nil},
+		//
+		// TODO: Re-enable these when the host can support resizing into the
+		// same folder.
+		//
+		// {minFolderSizeString, contractmanager.MinimumSectorsPerStorageFolder * modules.SectorSize, nil},
+		// {maxFolderSizeString, contractmanager.MaximumSectorsPerStorageFolder * modules.SectorSize, nil},
+		// {mediumSizeFolderString, 3 * contractmanager.MinimumSectorsPerStorageFolder * modules.SectorSize, nil},
 	}
 )
+
+// TestWorkingStatus tests that the host's WorkingStatus field is set correctly.
+func TestWorkingStatus(t *testing.T) {
+	if testing.Short() {
+		t.SkipNow()
+	}
+	t.Parallel()
+
+	st, err := createServerTester(t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.server.Close()
+
+	// announce a host, create an allowance, upload some data.
+	if err := st.announceHost(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.acceptContracts(); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.setHostStorage(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Set an allowance for the renter, allowing a contract to be formed.
+	allowanceValues := url.Values{}
+	allowanceValues.Set("funds", testFunds)
+	allowanceValues.Set("period", testPeriod)
+	if err = st.stdPostAPI("/renter", allowanceValues); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a file.
+	path := filepath.Join(st.dir, "test.dat")
+	fileBytes := 1024
+	if err := createRandFile(path, fileBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	// Upload to host.
+	uploadValues := url.Values{}
+	uploadValues.Set("source", path)
+	if err := st.stdPostAPI("/renter/upload/test", uploadValues); err != nil {
+		t.Fatal(err)
+	}
+
+	// Only one piece will be uploaded (10% at current redundancy)
+	var rf RenterFiles
+	for i := 0; i < 200 && (len(rf.Files) != 1 || rf.Files[0].UploadProgress < 10); i++ {
+		st.getAPI("/renter/files", &rf)
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(rf.Files) != 1 || rf.Files[0].UploadProgress < 10 {
+		t.Error(rf.Files[0].UploadProgress)
+		t.Fatal("uploading has failed")
+	}
+
+	time.Sleep(time.Second * 31)
+
+	var hg HostGET
+	st.getAPI("/host", &hg)
+
+	if hg.WorkingStatus != modules.HostWorkingStatusWorking {
+		t.Fatal("expected host to be working")
+	}
+}
+
+// TestConnectabilityStatus tests that the host's ConnectabilityStatus field is
+// set correctly.
+func TestConnectabilityStatus(t *testing.T) {
+	if testing.Short() {
+		t.SkipNow()
+	}
+	t.Parallel()
+
+	// create and announce a host
+	st, err := createServerTester(t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.server.Close()
+
+	if err := st.announceHost(); err != nil {
+		t.Fatal(err)
+	}
+
+	// wait a bit for the check to run
+	time.Sleep(time.Second * 31)
+
+	// check that the field was set correctly
+	var hg HostGET
+	st.getAPI("/host", &hg)
+
+	if hg.ConnectabilityStatus != modules.HostConnectabilityStatusConnectable {
+		t.Fatal("expected host to be connectable")
+	}
+}
 
 // TestStorageHandler tests that host storage is being reported correctly.
 func TestStorageHandler(t *testing.T) {
@@ -131,15 +233,15 @@ func TestAddFolderNoPath(t *testing.T) {
 	addValues := url.Values{}
 	addValues.Set("size", mediumSizeFolderString)
 	err = st.stdPostAPI("/host/storage/folders/add", addValues)
-	if err == nil || err.Error() != storagemanager.ErrEmptyPath.Error() {
-		t.Fatalf("expected error to be %v; got %v", storagemanager.ErrEmptyPath, err)
+	if err == nil {
+		t.Fatal(err)
 	}
 
 	// Setting the path to an empty string should trigger the same error.
 	addValues.Set("path", "")
 	err = st.stdPostAPI("/host/storage/folders/add", addValues)
-	if err == nil || err.Error() != storagemanager.ErrEmptyPath.Error() {
-		t.Fatalf("expected error to be %v; got %v", storagemanager.ErrEmptyPath, err)
+	if err == nil {
+		t.Fatal(err)
 	}
 }
 
@@ -187,8 +289,8 @@ func TestAddSameFolderTwice(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = st.stdPostAPI("/host/storage/folders/add", addValues)
-	if err == nil || err.Error() != storagemanager.ErrRepeatFolder.Error() {
-		t.Fatalf("expected err to be %v, got %v", err, storagemanager.ErrRepeatFolder)
+	if err == nil || err.Error() != contractmanager.ErrRepeatFolder.Error() {
+		t.Fatalf("expected err to be %v, got %v", err, contractmanager.ErrRepeatFolder)
 	}
 }
 
@@ -231,18 +333,18 @@ func TestResizeEmptyStorageFolder(t *testing.T) {
 
 	// Attempting to resize to the same size should return an error.
 	err = st.stdPostAPI("/host/storage/folders/resize", resizeValues)
-	if err == nil || err.Error() != storagemanager.ErrNoResize.Error() {
-		t.Fatalf("expected error %v, got %v", storagemanager.ErrNoResize, err)
+	if err == nil || err.Error() != contractmanager.ErrNoResize.Error() {
+		t.Fatalf("expected error %v, got %v", contractmanager.ErrNoResize, err)
 	}
 
 	// Try resizing to a bunch of sizes (invalid ones first, valid ones second).
 	// This ordering simplifies logic within the for loop.
-	for _, test := range resizeTests {
+	for i, test := range resizeTests {
 		// Attempt to resize the host's storage folder.
 		resizeValues.Set("newsize", test.sizeString)
 		err = st.stdPostAPI("/host/storage/folders/resize", resizeValues)
 		if (err == nil && test.err != nil) || (err != nil && err.Error() != test.err.Error()) {
-			t.Fatalf("expected error to be %v, got %v", test.err, err)
+			t.Fatalf("test %v: expected error to be %v, got %v", i, test.err, err)
 		}
 
 		// Find out if the resize call worked as expected.
@@ -254,7 +356,7 @@ func TestResizeEmptyStorageFolder(t *testing.T) {
 		if test.err == nil {
 			// Check that the folder's total capacity has been updated.
 			if got := sg.Folders[0].Capacity; got != test.size {
-				t.Fatalf("expected folder to be resized to %v; got %v instead", test.size, got)
+				t.Fatalf("test %v: expected folder to be resized to %v; got %v instead", i, test.size, got)
 			}
 			// Check that the folder's remaining capacity has been updated.
 			if got := sg.Folders[0].CapacityRemaining; got != test.size {
@@ -346,8 +448,8 @@ func TestResizeNonemptyStorageFolder(t *testing.T) {
 
 	// Attempting to resize to the same size should return an error.
 	err = st.stdPostAPI("/host/storage/folders/resize", resizeValues)
-	if err == nil || err.Error() != storagemanager.ErrNoResize.Error() {
-		t.Fatalf("expected error %v, got %v", storagemanager.ErrNoResize, err)
+	if err == nil || err.Error() != contractmanager.ErrNoResize.Error() {
+		t.Fatalf("expected error %v, got %v", contractmanager.ErrNoResize, err)
 	}
 
 	// Try resizing to a bunch of sizes (invalid ones first, valid ones second).
@@ -356,7 +458,7 @@ func TestResizeNonemptyStorageFolder(t *testing.T) {
 		// Attempt to resize the host's storage folder.
 		resizeValues.Set("newsize", test.sizeString)
 		err = st.stdPostAPI("/host/storage/folders/resize", resizeValues)
-		if (err == nil && test.err != nil) || (err != nil && err.Error() != test.err.Error()) {
+		if (err == nil && test.err != nil) || (err != nil && test.err == nil) || (err != nil && err.Error() != test.err.Error()) {
 			t.Fatalf("expected error to be %v, got %v", test.err, err)
 		}
 
@@ -555,8 +657,8 @@ func TestRemoveStorageFolderForced(t *testing.T) {
 	removeValues := url.Values{}
 	removeValues.Set("path", st.dir)
 	err = st.stdPostAPI("/host/storage/folders/remove", removeValues)
-	if err == nil || err.Error() != storagemanager.ErrIncompleteOffload.Error() {
-		t.Fatalf("expected err to be %v; got %v", storagemanager.ErrIncompleteOffload, err)
+	if err == nil || err.Error() != contractmanager.ErrPartialRelocation.Error() {
+		t.Fatalf("expected err to be %v; got %v", contractmanager.ErrPartialRelocation, err)
 	}
 	// Forced removal of the folder should succeed, though.
 	removeValues.Set("force", "true")
@@ -653,8 +755,8 @@ func TestDeleteNonexistentSector(t *testing.T) {
 	// Right now, the calls fail for the first reason. This test will report if that behavior changes.
 	badHash := crypto.HashObject("fake object").String()
 	err = st.stdPostAPI("/host/storage/sectors/delete/"+badHash, url.Values{})
-	if err == nil || err.Error() != storagemanager.ErrSectorNotFound.Error() {
-		t.Fatalf("expected error to be %v; got %v", storagemanager.ErrSectorNotFound, err)
+	if err == nil || err.Error() != contractmanager.ErrSectorNotFound.Error() {
+		t.Fatalf("expected error to be %v; got %v", contractmanager.ErrSectorNotFound, err)
 	}
 	wrongSize := "wrong size string"
 	err = st.stdPostAPI("/host/storage/sectors/delete/"+wrongSize, url.Values{})
