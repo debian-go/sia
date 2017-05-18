@@ -350,10 +350,10 @@ func (h *Host) managedAddStorageObligation(so storageObligation) error {
 
 			// If the storage obligation already has sectors, it means that the
 			// file contract is being renewed, and that the sector should be
-			// re-added with a new expriation height. If there is an error at any
+			// re-added with a new expiration height. If there is an error at any
 			// point, all of the sectors should be removed.
 			if len(so.SectorRoots) != 0 {
-				err := h.AddSectorBatch(so.SectorRoots, so.expiration())
+				err := h.AddSectorBatch(so.SectorRoots)
 				if err != nil {
 					return err
 				}
@@ -461,7 +461,7 @@ func (h *Host) modifyStorageObligation(so storageObligation, sectorsRemoved []cr
 	var i int
 	var err error
 	for i = range sectorsGained {
-		err = h.AddSector(sectorsGained[i], so.expiration(), gainedSectorData[i])
+		err = h.AddSector(sectorsGained[i], gainedSectorData[i])
 		if err != nil {
 			break
 		}
@@ -472,7 +472,7 @@ func (h *Host) modifyStorageObligation(so storageObligation, sectorsRemoved []cr
 		for j := 0; j < i; j++ {
 			// Error is not checked because there's nothing useful that can be
 			// done about an error.
-			_ = h.RemoveSector(sectorsGained[j], so.expiration())
+			_ = h.RemoveSector(sectorsGained[j])
 		}
 		return err
 	}
@@ -495,7 +495,7 @@ func (h *Host) modifyStorageObligation(so storageObligation, sectorsRemoved []cr
 		for i := range sectorsGained {
 			// Error is not checked because there's nothing useful that can be
 			// done about an error.
-			_ = h.RemoveSector(sectorsGained[i], so.expiration())
+			_ = h.RemoveSector(sectorsGained[i])
 		}
 		return err
 	}
@@ -504,7 +504,7 @@ func (h *Host) modifyStorageObligation(so storageObligation, sectorsRemoved []cr
 		// Error is not checkeed because there's nothing useful that can be
 		// done about an error. Failing to remove a sector is not a terrible
 		// place to be, especially if the host can run consistency checks.
-		_ = h.RemoveSector(sectorsRemoved[k], so.expiration())
+		_ = h.RemoveSector(sectorsRemoved[k])
 	}
 
 	// Update the financial information for the storage obligation - remove the
@@ -532,13 +532,9 @@ func (h *Host) modifyStorageObligation(so storageObligation, sectorsRemoved []cr
 // removeStorageObligation will remove a storage obligation from the host,
 // either due to failure or success.
 func (h *Host) removeStorageObligation(so storageObligation, sos storageObligationStatus) error {
-
-	// Call removeSector for every sector in the storage obligation.
-	for _, root := range so.SectorRoots {
-		// Error is not checked, we want to call remove on every sector even if
-		// there are problems - disk health information will be updated.
-		_ = h.RemoveSector(root, so.expiration())
-	}
+	// Error is not checked, we want to call remove on every sector even if
+	// there are problems - disk health information will be updated.
+	_ = h.RemoveSectorBatch(so.SectorRoots)
 
 	// Update the host revenue metrics based on the status of the obligation.
 	if sos == obligationUnresolved {
@@ -560,7 +556,7 @@ func (h *Host) removeStorageObligation(so storageObligation, sos storageObligati
 	}
 	if sos == obligationSucceeded {
 		// Remove the obligation statistics as potential risk and income.
-		h.log.Printf("Succesfully submitted a storage proof. Revenue is %v.\n", h.financialMetrics.PotentialContractCompensation.Add(h.financialMetrics.PotentialStorageRevenue).Add(h.financialMetrics.PotentialDownloadBandwidthRevenue).Add(h.financialMetrics.PotentialUploadBandwidthRevenue))
+		h.log.Printf("Successfully submitted a storage proof. Revenue is %v.\n", h.financialMetrics.PotentialContractCompensation.Add(h.financialMetrics.PotentialStorageRevenue).Add(h.financialMetrics.PotentialDownloadBandwidthRevenue).Add(h.financialMetrics.PotentialUploadBandwidthRevenue))
 		h.financialMetrics.PotentialContractCompensation = h.financialMetrics.PotentialContractCompensation.Sub(so.ContractCost)
 		h.financialMetrics.LockedStorageCollateral = h.financialMetrics.LockedStorageCollateral.Sub(so.LockedCollateral)
 		h.financialMetrics.PotentialStorageRevenue = h.financialMetrics.PotentialStorageRevenue.Sub(so.PotentialStorageRevenue)
@@ -826,7 +822,7 @@ func (h *Host) threadedHandleActionItem(soid types.FileContractID, wg *sync.Wait
 		}
 		so.TransactionFeesAdded = so.TransactionFeesAdded.Add(requiredFee)
 
-		// Queue another action item to check whether there the storage proof
+		// Queue another action item to check whether the storage proof
 		// got confirmed.
 		h.mu.Lock()
 		err = h.queueActionItem(so.proofDeadline(), so.id())

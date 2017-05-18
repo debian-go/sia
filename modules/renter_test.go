@@ -1,7 +1,6 @@
 package modules
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/persist"
+	"github.com/NebulousLabs/fastrand"
 )
 
 // TestMerkleRootSetCompatibility checks that the persist encoding for the
@@ -35,10 +35,7 @@ func TestMerkleRootSetCompatibility(t *testing.T) {
 		var chs chStruct
 		for j := 0; j < i; j++ {
 			var ch crypto.Hash
-			_, err := rand.Read(ch[:])
-			if err != nil {
-				t.Fatal(err)
-			}
+			fastrand.Read(ch[:])
 			chs.Hashes = append(chs.Hashes, ch)
 		}
 
@@ -49,14 +46,14 @@ func TestMerkleRootSetCompatibility(t *testing.T) {
 			t.Fatal(err)
 		}
 		filename := filepath.Join(dir, "file")
-		err = persist.SaveFile(meta, chs, filename)
+		err = persist.SaveJSON(meta, chs, filename)
 		if err != nil {
 			t.Fatal(err)
 		}
 
 		// Load and verify equivalence.
 		var loadCHS chStruct
-		err = persist.LoadFile(meta, &loadCHS, filename)
+		err = persist.LoadJSON(meta, &loadCHS, filename)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +71,7 @@ func TestMerkleRootSetCompatibility(t *testing.T) {
 			Hashes MerkleRootSet
 		}
 		var loadMRS mrStruct
-		err = persist.LoadFile(meta, &loadMRS, filename)
+		err = persist.LoadJSON(meta, &loadMRS, filename)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -90,11 +87,11 @@ func TestMerkleRootSetCompatibility(t *testing.T) {
 		// Save as a MerkleRootSet and verify it can be loaded again.
 		var mrs mrStruct
 		mrs.Hashes = MerkleRootSet(chs.Hashes)
-		err = persist.SaveFile(meta, mrs, filename)
+		err = persist.SaveJSON(meta, mrs, filename)
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = persist.LoadFile(meta, &loadMRS, filename)
+		err = persist.LoadJSON(meta, &loadMRS, filename)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -119,10 +116,7 @@ func BenchmarkMerkleRootSetEncode(b *testing.B) {
 	var chs chStruct
 	for i := 0; i < 1e3; i++ {
 		var ch crypto.Hash
-		_, err := rand.Read(ch[:])
-		if err != nil {
-			b.Fatal(err)
-		}
+		fastrand.Read(ch[:])
 		chs.Hashes = append(chs.Hashes, ch)
 	}
 
@@ -145,10 +139,7 @@ func BenchmarkSliceCryptoHashEncode(b *testing.B) {
 	var chs chStruct
 	for i := 0; i < 1e3; i++ {
 		var ch crypto.Hash
-		_, err := rand.Read(ch[:])
-		if err != nil {
-			b.Fatal(err)
-		}
+		fastrand.Read(ch[:])
 		chs.Hashes = append(chs.Hashes, ch)
 	}
 
@@ -177,10 +168,7 @@ func BenchmarkMerkleRootSetSave(b *testing.B) {
 	var chs chStruct
 	for i := 0; i < 1e3; i++ {
 		var ch crypto.Hash
-		_, err := rand.Read(ch[:])
-		if err != nil {
-			b.Fatal(err)
-		}
+		fastrand.Read(ch[:])
 		chs.Hashes = append(chs.Hashes, ch)
 	}
 
@@ -194,7 +182,7 @@ func BenchmarkMerkleRootSetSave(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = persist.SaveFileSync(meta, chs, filename)
+		err = persist.SaveJSON(meta, chs, filename)
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -217,10 +205,7 @@ func BenchmarkSliceCryptoHashSave(b *testing.B) {
 	var chs chStruct
 	for i := 0; i < 1e3; i++ {
 		var ch crypto.Hash
-		_, err := rand.Read(ch[:])
-		if err != nil {
-			b.Fatal(err)
-		}
+		fastrand.Read(ch[:])
 		chs.Hashes = append(chs.Hashes, ch)
 	}
 
@@ -234,7 +219,7 @@ func BenchmarkSliceCryptoHashSave(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		err = persist.SaveFileSync(meta, chs, filename)
+		err = persist.SaveJSON(meta, chs, filename)
 		if err != nil {
 			b.Fatal(err)
 		}

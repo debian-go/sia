@@ -71,7 +71,7 @@ type (
 		// priority upload chan, and finally all of the work in the upload
 		// chan.
 		//
-		// A busy higher priority channel is able to entriely starve all of the
+		// A busy higher priority channel is able to entirely starve all of the
 		// channels with lower priority.
 		downloadChan         chan downloadWork // higher priority than all uploads
 		killChan             chan struct{}     // highest priority
@@ -87,14 +87,14 @@ type (
 		// has failed.
 		recentDownloadFailure time.Time // Only modified by the primary download loop.
 
-		// Utilities
+		// Utilities.
 		renter *Renter
 	}
 )
 
 // download will perform some download work.
 func (w *worker) download(dw downloadWork) {
-	d, err := w.renter.hostContractor.Downloader(w.contractID)
+	d, err := w.renter.hostContractor.Downloader(w.contractID, w.renter.tg.StopChan())
 	if err != nil {
 		select {
 		case dw.resultChan <- finishedDownload{dw.chunkDownload, nil, err, dw.pieceIndex, w.contractID}:
@@ -113,7 +113,7 @@ func (w *worker) download(dw downloadWork) {
 
 // upload will perform some upload work.
 func (w *worker) upload(uw uploadWork) {
-	e, err := w.renter.hostContractor.Editor(w.contractID)
+	e, err := w.renter.hostContractor.Editor(w.contractID, w.renter.tg.StopChan())
 	if err != nil {
 		w.recentUploadFailure = time.Now()
 		w.consecutiveUploadFailures++

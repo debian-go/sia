@@ -110,15 +110,16 @@ returns the set of constants in use.
 ###### JSON Response [(with comments)](/doc/api/Daemon.md#json-response)
 ```javascript
 {
-  "genesistimestamp":      1257894000, // Unix time
-  "blocksizelimit":        2000000,    // bytes
-  "blockfrequency":        600,        // seconds per block
-  "targetwindow":          1000,       // blocks
-  "mediantimestampwindow": 11,         // blocks
-  "futurethreshold":       10800,      // seconds
-  "siafundcount":          "10000",
-  "siafundportion":        "39/1000",
-  "maturitydelay":         144,        // blocks
+  "blockfrequency":         600,        // seconds per block
+  "blocksizelimit":         2000000,    // bytes
+  "extremefuturethreshold": 10800,      // seconds
+  "futurethreshold":        10800,      // seconds
+  "genesistimestamp":       1257894000, // Unix time
+  "maturitydelay":          144,        // blocks
+  "mediantimestampwindow":  11,         // blocks
+  "siafundcount":           "10000",
+  "siafundportion":         "39/1000",
+  "targetwindow":           1000,       // blocks
 
   "initialcoinbase": 300000, // Siacoins (see note in Daemon.md)
   "minimumcoinbase": 30000,  // Siacoins (see note in Daemon.md)
@@ -173,7 +174,8 @@ returns information about the consensus set, such as the current block height.
   "synced":       true,
   "height":       62248,
   "currentblock": "00000000000008a84884ba827bdc868a17ba9c14011de33ff763bd95779a9cf1",
-  "target":       [0,0,0,0,0,0,11,48,125,79,116,89,136,74,42,27,5,14,10,31,23,53,226,238,202,219,5,204,38,32,59,165]
+  "target":       [0,0,0,0,0,0,11,48,125,79,116,89,136,74,42,27,5,14,10,31,23,53,226,238,202,219,5,204,38,32,59,165],
+  "difficulty":   "1234"
 }
 ```
 
@@ -339,7 +341,10 @@ fetches status information about the host.
     "revisecalls":       4,
     "settingscalls":     5,
     "unrecognizedcalls": 6
-  }
+  },
+
+  "connectabilitystatus": "checking",
+  "workingstatus":        "checking"
 }
 ```
 
@@ -586,6 +591,8 @@ overall.
     "publickeystring": "ed25519:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
   },
   "scorebreakdown": {
+    "score": 1,
+
     "ageadjustment":              0.1234,
     "burnadjustment":             0.1234,
     "collateraladjustment":       23.456,
@@ -737,12 +744,49 @@ returns active contracts. Expired contracts are not included.
 {
   "contracts": [
     {
-      "endheight":       50000, // block height
-      "id":              "1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-      "lasttransaction": {}, // types.Transaction
-      "netaddress":      "12.34.56.78:9",
-      "renterfunds":     "1234", // hastings
-      "size":            8192    // bytes
+      // Amount of contract funds that have been spent on downloads.
+      "downloadspending": "1234", // hastings
+
+      // Block height that the file contract ends on.
+      "endheight": 50000, // block height
+
+      // Fees paid in order to form the file contract.
+      "fees": "1234", // hastings
+
+      // Public key of the host the contract was formed with.
+      "hostpublickey": {
+        "algorithm": "ed25519",
+        "key": "RW50cm9weSBpc24ndCB3aGF0IGl0IHVzZWQgdG8gYmU="
+      },
+
+      // ID of the file contract.
+      "id": "1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+
+      // A signed transaction containing the most recent contract revision.
+      "lasttransaction": {},
+
+      // Address of the host the file contract was formed with.
+      "netaddress": "12.34.56.78:9",
+
+      // Remaining funds left for the renter to spend on uploads & downloads.
+      "renterfunds": "1234", // hastings
+
+      // Size of the file contract, which is typically equal to the number of
+      // bytes that have been uploaded to the host.
+      "size": 8192, // bytes
+
+      // Block height that the file contract began on.
+      "startheight": 50000, // block height
+
+      // Amount of contract funds that have been spent on storage.
+      "storagespending": "1234", // hastings
+
+      // Total cost to the wallet of forming the file contract.
+      // This includes both the fees and the funds allocated in the contract.
+      "totalcost": "1234", // hastings
+
+      // Amount of contract funds that have been spent on uploads.
+      "uploadspending": "1234" // hastings
     }
   ]
 }
@@ -907,12 +951,14 @@ Wallet
 | [/wallet/addresses](#walletaddresses-get)                       | GET       |
 | [/wallet/backup](#walletbackup-get)                             | GET       |
 | [/wallet/init](#walletinit-post)                                | POST      |
+| [/wallet/init/seed](#walletinitseed-post)                       | POST      |
 | [/wallet/lock](#walletlock-post)                                | POST      |
 | [/wallet/seed](#walletseed-post)                                | POST      |
 | [/wallet/seeds](#walletseeds-get)                               | GET       |
 | [/wallet/siacoins](#walletsiacoins-post)                        | POST      |
 | [/wallet/siafunds](#walletsiafunds-post)                        | POST      |
 | [/wallet/siagkey](#walletsiagkey-post)                          | POST      |
+| [/wallet/sweep/seed](#walletsweepseed-post)                     | POST      |
 | [/wallet/transaction/___:id___](#wallettransactionid-get)       | GET       |
 | [/wallet/transactions](#wallettransactions-get)                 | GET       |
 | [/wallet/transactions/___:addr___](#wallettransactionsaddr-get) | GET       |
@@ -1002,15 +1048,16 @@ standard success or error response. See
 
 #### /wallet/init [POST]
 
-initializes the wallet. After the wallet has been initialized once, it does not
-need to be initialized again, and future calls to /wallet/init will return an
-error. The encryption password is provided by the api call. If the password is
-blank, then the password will be set to the same as the seed.
+initializes the wallet. After the wallet has been initialized once, it does
+not need to be initialized again, and future calls to /wallet/init will return
+an error. The encryption password is provided by the api call. If the password
+is blank, then the password will be set to the same as the seed.
 
 ###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-2)
 ```
 encryptionpassword
 dictionary // Optional, default is english.
+force // Optional, when set to true it will destroy an existing wallet and reinitialize a new one.
 ```
 
 ###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-3)
@@ -1020,6 +1067,29 @@ dictionary // Optional, default is english.
 }
 ```
 
+#### /wallet/init/seed [POST]
+
+initializes the wallet using a preexisting seed. After the wallet has been
+initialized once, it does not need to be initialized again, and future calls
+to /wallet/init/seed will return an error. The encryption password is provided
+by the api call. If the password is blank, then the password will be set to
+the same as the seed. Note that loading a preexisting seed requires scanning
+the blockchain to determine how many keys have been generated from the seed.
+For this reason, /wallet/init/seed can only be called if the blockchain is
+synced.
+
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-3)
+```
+encryptionpassword
+dictionary // Optional, default is english.
+seed
+force // Optional, when set to true it will destroy an existing wallet and reinitialize a new one.
+```
+
+###### Response
+standard success or error response. See
+[#standard-responses](#standard-responses).
+
 #### /wallet/seed [POST]
 
 gives the wallet a seed to track when looking for incoming transactions. The
@@ -1027,7 +1097,7 @@ wallet will be able to spend outputs related to addresses created by the seed.
 The seed is added as an auxiliary seed, and does not replace the primary seed.
 Only the primary seed will be used for generating new addresses.
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-3)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-4)
 ```
 encryptionpassword
 dictionary
@@ -1044,7 +1114,7 @@ returns the list of seeds in use by the wallet. The primary seed is the only
 seed that gets used to generate new addresses. This call is unavailable when
 the wallet is locked.
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-4)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-5)
 ```
 dictionary
 ```
@@ -1066,7 +1136,7 @@ dictionary
 sends siacoins to an address. The outputs are arbitrarily selected from
 addresses in the wallet.
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-5)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-6)
 ```
 amount      // hastings
 destination // address
@@ -1093,7 +1163,7 @@ access all of the siacoins in the siacoin claim balance, send all of the
 siafunds to an address in your control (this will give you all the siacoins,
 while still letting you control the siafunds).
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-6)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-7)
 ```
 amount      // siafunds
 destination // address
@@ -1115,7 +1185,7 @@ destination // address
 loads a key into the wallet that was generated by siag. Most siafunds are
 currently in addresses created by siag.
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-7)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-8)
 ```
 encryptionpassword
 keyfiles
@@ -1124,6 +1194,25 @@ keyfiles
 ###### Response
 standard success or error response. See
 [#standard-responses](#standard-responses).
+
+#### /wallet/sweep/seed [POST]
+
+Function: Scan the blockchain for outputs belonging to a seed and send them to
+an address owned by the wallet.
+
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-9)
+```
+dictionary // Optional, default is english.
+seed
+```
+
+###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-7)
+```javascript
+{
+  "coins": "123456", // hastings, big int
+  "funds": "1",      // siafunds, big int
+}
+```
 
 #### /wallet/lock [POST]
 
@@ -1145,7 +1234,7 @@ gets the transaction associated with a specific transaction id.
 :id
 ```
 
-###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-7)
+###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-8)
 ```javascript
 {
   "transaction": {
@@ -1180,13 +1269,13 @@ gets the transaction associated with a specific transaction id.
 
 returns a list of transactions related to the wallet in chronological order.
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-8)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-10)
 ```
 startheight // block height
 endheight   // block height
 ```
 
-###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-8)
+###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-9)
 ```javascript
 {
   "confirmedtransactions": [
@@ -1211,7 +1300,7 @@ returns all of the transactions related to a specific address.
 :addr
 ```
 
-###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-9)
+###### JSON Response [(with comments)](/doc/api/Wallet.md#json-response-10)
 ```javascript
 {
   "transactions": [
@@ -1227,7 +1316,7 @@ returns all of the transactions related to a specific address.
 unlocks the wallet. The wallet is capable of knowing whether the correct
 password was provided.
 
-###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-9)
+###### Query String Parameters [(with comments)](/doc/api/Wallet.md#query-string-parameters-11)
 ```
 encryptionpassword
 ```

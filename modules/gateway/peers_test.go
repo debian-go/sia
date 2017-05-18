@@ -1,14 +1,15 @@
 package gateway
 
 import (
+	"fmt"
 	"net"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/NebulousLabs/Sia/build"
-	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/modules"
+	"github.com/NebulousLabs/fastrand"
 	"github.com/NebulousLabs/muxado"
 )
 
@@ -46,6 +47,83 @@ func TestAddPeer(t *testing.T) {
 	})
 	if len(g.peers) != 1 {
 		t.Fatal("gateway did not add peer")
+	}
+}
+
+// TestAcceptPeer tests that acceptPeer does't kick outbound or local peers.
+func TestAcceptPeer(t *testing.T) {
+	if testing.Short() {
+		t.SkipNow()
+	}
+	t.Parallel()
+	g := newTestingGateway(t)
+	defer g.Close()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Add only unkickable peers.
+	var unkickablePeers []*peer
+	for i := 0; i < fullyConnectedThreshold+1; i++ {
+		addr := modules.NetAddress(fmt.Sprintf("1.2.3.%d", i))
+		p := &peer{
+			Peer: modules.Peer{
+				NetAddress: addr,
+				Inbound:    false,
+				Local:      false,
+			},
+			sess: muxado.Client(new(dummyConn)),
+		}
+		unkickablePeers = append(unkickablePeers, p)
+	}
+	for i := 0; i < fullyConnectedThreshold+1; i++ {
+		addr := modules.NetAddress(fmt.Sprintf("127.0.0.1:%d", i))
+		p := &peer{
+			Peer: modules.Peer{
+				NetAddress: addr,
+				Inbound:    true,
+				Local:      true,
+			},
+			sess: muxado.Client(new(dummyConn)),
+		}
+		unkickablePeers = append(unkickablePeers, p)
+	}
+	for _, p := range unkickablePeers {
+		g.addPeer(p)
+	}
+
+	// Test that accepting another peer doesn't kick any of the peers.
+	g.acceptPeer(&peer{
+		Peer: modules.Peer{
+			NetAddress: "9.9.9.9",
+			Inbound:    true,
+		},
+		sess: muxado.Client(new(dummyConn)),
+	})
+	for _, p := range unkickablePeers {
+		if _, exists := g.peers[p.NetAddress]; !exists {
+			t.Error("accept peer kicked an outbound or local peer")
+		}
+	}
+
+	// Add a kickable peer.
+	g.addPeer(&peer{
+		Peer: modules.Peer{
+			NetAddress: "9.9.9.9",
+			Inbound:    true,
+		},
+		sess: muxado.Client(new(dummyConn)),
+	})
+	// Test that accepting a local peer will kick a kickable peer.
+	g.acceptPeer(&peer{
+		Peer: modules.Peer{
+			NetAddress: "127.0.0.1:99",
+			Inbound:    true,
+			Local:      true,
+		},
+		sess: muxado.Client(new(dummyConn)),
+	})
+	if _, exists := g.peers["9.9.9.9"]; exists {
+		t.Error("acceptPeer didn't kick a peer to make room for a local peer")
 	}
 }
 
@@ -794,12 +872,7 @@ func TestOverloadedBootstrap(t *testing.T) {
 	// below the well connected threshold, but there are still enough nodes on
 	// the network that no partitions should occur.
 	var newGS []*Gateway
-	perm, err := crypto.Perm(len(gs))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Reorder the gateways.
-	for _, i := range perm {
+	for _, i := range fastrand.Perm(len(gs)) {
 		newGS = append(newGS, gs[i])
 	}
 	cutSize := len(newGS) / 4
@@ -845,7 +918,7 @@ func TestOverloadedBootstrap(t *testing.T) {
 
 	// Close all remaining gateways.
 	for _, g := range gs {
-		err = g.Close()
+		err := g.Close()
 		if err != nil {
 			t.Error(err)
 		}
