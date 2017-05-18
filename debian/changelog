@@ -1,4 +1,4 @@
-sia (1.1.2-4) UNRELEASED; urgency=medium
+sia (1.2.1-1) UNRELEASED; urgency=medium
 
   * Added bash completion for siac
   * Change section to net (Closes: #855271) 
@@ -7,35 +7,12 @@ sia (1.1.2-4) UNRELEASED; urgency=medium
   * Added logrotate 
   * Exact version of muxido for stabillity
   * Manpage for siad 
-
- -- Bjorn Dolk <debian@bjorndolk.com>  Fri, 28 Apr 2017 08:22:19 +0200
-
-sia (1.1.2-3) unstable; urgency=medium
-
-  * Added watch file 
-
- -- Bjorn Dolk <debian@bjorndolk.com>  Sat, 15 Apr 2017 20:11:02 +0200
-
-sia (1.1.2-2) unstable; urgency=medium
-
-  * Build with golang 1.8 instead of 1.7 
-
- -- Bjorn Dolk <debian@bjorndolk.com>  Sun, 09 Apr 2017 21:53:29 +0200
-
-sia (1.1.2-1) unstable; urgency=medium
-
-  * New upstream version 1.1.2
-
- -- Bjorn Dolk <debian@bjorndolk.com>  Sat, 08 Apr 2017 21:55:35 +0200
-
-sia (1.0.4-2) unstable; urgency=medium
-
   * Added system-d config
   * Added user sia with home /var/lib/sia
   * Added logdir /var/lib/sia
   * Added patch to write logs to /var/log/sia
 
- -- Bjorn Dolk <debian@bjorndolk.com>  Fri, 07 Apr 2017 20:31:05 +0200
+ -- Bjorn Dolk <debian@bjorndolk.com>  Fri, 28 Apr 2017 08:22:19 +0200
 
 sia (1.0.4-1) unstable; urgency=medium
 
