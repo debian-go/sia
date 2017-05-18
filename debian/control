@@ -19,7 +19,7 @@ Build-Depends: debhelper (>= 10),
                golang-github-nebulouslabs-go-upnp-dev,
                golang-github-nebulouslabs-merkletree-dev,
                golang-github-huin-goupnp-dev,
-               golang-github-inconshreveable-muxado-dev (= 0.0~git20140312.0.f693c7e-1),
+               golang-github-inconshreveable-muxado-dev,
                golang-github-spf13-cobra-dev,
                bash-completion
 Standards-Version: 3.9.8
