@@ -1,25 +1,11 @@
-language: go
+sudo: required
 
-os:
-  - linux
+services:
+  - docker
 
-go:
-  - 1.8
-
-install:
-  - make dependencies
-  - test -z "$(go fmt ./...)"
-  - glyphcheck ./...
-  - make
-
-script: make test && make test-long && make cover && make bench
-
-sudo: false
+script:
+  - wget -O- http://travis.debian.net/script.sh | sh -
 
 branches:
-  only:
-    - master
-    - staging
-
-notifications:
-  email: false
+  except:
+    - /^debian\/\d/
