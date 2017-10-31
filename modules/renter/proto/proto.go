@@ -8,7 +8,7 @@ import (
 	"github.com/NebulousLabs/Sia/types"
 )
 
-// dependencies
+// Dependencies.
 type (
 	transactionBuilder interface {
 		AddFileContract(types.FileContract) uint64
@@ -26,6 +26,11 @@ type (
 	transactionPool interface {
 		AcceptTransactionSet([]types.Transaction) error
 		FeeEstimation() (min types.Currency, max types.Currency)
+	}
+
+	hostDB interface {
+		IncrementSuccessfulInteractions(key types.SiaPublicKey)
+		IncrementFailedInteractions(key types.SiaPublicKey)
 	}
 )
 

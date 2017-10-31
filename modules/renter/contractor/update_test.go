@@ -1,14 +1,17 @@
 package contractor
 
 import (
+	"errors"
 	"io/ioutil"
 	"testing"
 	"time"
 
+	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/modules"
 	"github.com/NebulousLabs/Sia/persist"
 	"github.com/NebulousLabs/Sia/types"
+	"github.com/NebulousLabs/fastrand"
 )
 
 // TestProcessConsensusUpdate tests that contracts are removed at the expected
@@ -25,8 +28,9 @@ func TestProcessConsensusUpdate(t *testing.T) {
 		contracts: map[types.FileContractID]modules.RenterContract{
 			rc.ID: rc,
 		},
-		persist: new(memPersist),
-		log:     persist.NewLogger(ioutil.Discard),
+		oldContracts: make(map[types.FileContractID]modules.RenterContract),
+		persist:      new(memPersist),
+		log:          persist.NewLogger(ioutil.Discard),
 	}
 
 	// process 20 blocks; contract should remain
@@ -56,7 +60,7 @@ func TestIntegrationAutoRenew(t *testing.T) {
 	}
 	t.Parallel()
 	// create testing trio
-	_, c, m, err := newTestingTrio("TestIntegrationAutoRenew")
+	_, c, m, err := newTestingTrio(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,17 +76,23 @@ func TestIntegrationAutoRenew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	err = build.Retry(50, 100*time.Millisecond, func() error {
+		if len(c.Contracts()) == 0 {
+			return errors.New("contracts were not formed")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	contract := c.Contracts()[0]
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	// insert the sector
 	root, err := editor.Upload(data)
 	if err != nil {
@@ -103,8 +113,8 @@ func TestIntegrationAutoRenew(t *testing.T) {
 	}
 	// wait for goroutine in ProcessConsensusChange to finish
 	time.Sleep(100 * time.Millisecond)
-	c.editLock.Lock()
-	c.editLock.Unlock()
+	c.maintenanceLock.Lock()
+	c.maintenanceLock.Unlock()
 
 	// check renewed contract
 	contract = c.Contracts()[0]
@@ -127,7 +137,7 @@ func TestIntegrationRenewInvalidate(t *testing.T) {
 	}
 	t.Parallel()
 	// create testing trio
-	_, c, m, err := newTestingTrio("TestIntegrationRenewInvalidate")
+	_, c, m, err := newTestingTrio(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,17 +153,23 @@ func TestIntegrationRenewInvalidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	err = build.Retry(50, 100*time.Millisecond, func() error {
+		if len(c.Contracts()) == 0 {
+			return errors.New("contracts were not formed")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	contract := c.Contracts()[0]
 
 	// revise the contract
-	editor, err := c.Editor(contract.ID)
+	editor, err := c.Editor(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := crypto.RandBytes(int(modules.SectorSize))
-	if err != nil {
-		t.Fatal(err)
-	}
+	data := fastrand.Bytes(int(modules.SectorSize))
 	// insert the sector
 	root, err := editor.Upload(data)
 	if err != nil {
@@ -170,8 +186,8 @@ func TestIntegrationRenewInvalidate(t *testing.T) {
 	}
 	// wait for goroutine in ProcessConsensusChange to finish
 	time.Sleep(100 * time.Millisecond)
-	c.editLock.Lock()
-	c.editLock.Unlock()
+	c.maintenanceLock.Lock()
+	c.maintenanceLock.Unlock()
 
 	// check renewed contract
 	contract = c.Contracts()[0]
@@ -193,7 +209,7 @@ func TestIntegrationRenewInvalidate(t *testing.T) {
 	editor.Close()
 
 	// create a downloader
-	downloader, err := c.Downloader(contract.ID)
+	downloader, err := c.Downloader(contract.ID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,8 +223,8 @@ func TestIntegrationRenewInvalidate(t *testing.T) {
 	}
 	// wait for goroutine in ProcessConsensusChange to finish
 	time.Sleep(100 * time.Millisecond)
-	c.editLock.Lock()
-	c.editLock.Unlock()
+	c.maintenanceLock.Lock()
+	c.maintenanceLock.Unlock()
 
 	// downloader should have been invalidated
 	_, err = downloader.Sector(crypto.Hash{})

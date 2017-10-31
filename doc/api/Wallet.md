@@ -35,16 +35,20 @@ Index
 | [/wallet/addresses](#walletaddresses-get)                       | GET       |
 | [/wallet/backup](#walletbackup-get)                             | GET       |
 | [/wallet/init](#walletinit-post)                                | POST      |
+| [/wallet/init/seed](#walletinitseed-post)                       | POST      |
 | [/wallet/lock](#walletlock-post)                                | POST      |
 | [/wallet/seed](#walletseed-post)                                | POST      |
 | [/wallet/seeds](#walletseeds-get)                               | GET       |
 | [/wallet/siacoins](#walletsiacoins-post)                        | POST      |
 | [/wallet/siafunds](#walletsiafunds-post)                        | POST      |
 | [/wallet/siagkey](#walletsiagkey-post)                          | POST      |
+| [/wallet/sweep/seed](#walletsweepseed-post)                     | POST      |
 | [/wallet/transaction/___:id___](#wallettransactionid-get)       | GET       |
 | [/wallet/transactions](#wallettransactions-get)                 | GET       |
 | [/wallet/transactions/___:addr___](#wallettransactionsaddr-get) | GET       |
 | [/wallet/unlock](#walletunlock-post)                            | POST      |
+| [/wallet/verify/address/:___addr___](#walletverifyaddress-get)  | GET       |
+| [/wallet/changepassword](#walletchangepassword-post)            | POST      |
 
 #### /wallet [GET]
 
@@ -65,6 +69,11 @@ locked or unlocked.
   // Indicates whether the wallet is currently locked or unlocked. Some calls
   // become unavailable when the wallet is locked.
   "unlocked": true,
+
+  // Indicates whether the wallet is currently rescanning the blockchain. This
+  // will be true for the duration of calls to /unlock, /seeds, /init/seed,
+  // and /sweep/seed.
+  "rescanning": false,
 
   // Number of siacoins, in hastings, available to the wallet as of the most
   // recent block in the blockchain.
@@ -132,7 +141,10 @@ be returned if the wallet is locked.
 
 #### /wallet/addresses [GET]
 
-fetches the list of addresses from the wallet.
+fetches the list of addresses from the wallet. If the wallet has not been
+created or unlocked, no addresses will be returned. After the wallet is
+unlocked, this call will continue to return its addresses even after the
+wallet is locked again.
 
 ###### JSON Response
 ```javascript
@@ -168,8 +180,9 @@ standard success or error response. See
 
 initializes the wallet. After the wallet has been initialized once, it does not
 need to be initialized again, and future calls to /wallet/init will return an
-error. The encryption password is provided by the api call. If the password is
-blank, then the password will be set to the same as the seed.
+error, unless the force flag is set. The encryption password is provided by the
+api call. If the password is blank, then the password will be set to the same
+as the seed.
 
 ###### Query String Parameters
 ```
@@ -181,6 +194,11 @@ encryptionpassword
 // Name of the dictionary that should be used when encoding the seed. 'english'
 // is the most common choice when picking a dictionary.
 dictionary // Optional, default is english.
+
+// boolean, when set to true /wallet/init will Reset the wallet if one exists
+// instead of returning an error. This allows API callers to reinitialize a new
+// wallet.
+force
 ```
 
 ###### JSON Response
@@ -190,6 +208,42 @@ dictionary // Optional, default is english.
   "primaryseed": "hello world hello world hello world hello world hello world hello world hello world hello world hello world hello world hello world hello world hello world hello world hello"
 }
 ```
+
+#### /wallet/init/seed [POST]
+
+initializes the wallet using a preexisting seed. After the wallet has been
+initialized once, it does not need to be initialized again, and future calls to
+/wallet/init/seed will return an error unless the force flag is set. The
+encryption password is provided by the api call. If the password is blank, then
+the password will be set to the same as the seed. Note that loading a
+preexisting seed requires scanning the blockchain to determine how many keys
+have been generated from the seed.  For this reason, /wallet/init/seed can only
+be called if the blockchain is synced.
+
+###### Query String Parameters
+```
+// Password that will be used to encrypt the wallet. All subsequent calls
+// should use this password. If left blank, the seed that gets returned will
+// also be the encryption password.
+encryptionpassword
+
+// Name of the dictionary that should be used when encoding the seed. 'english'
+// is the most common choice when picking a dictionary.
+dictionary // Optional, default is english.
+
+// Dictionary-encoded phrase that corresponds to the seed being used to
+// initialize the wallet.
+seed
+
+// boolean, when set to true /wallet/init will Reset the wallet if one exists
+// instead of returning an error. This allows API callers to reinitialize a new
+// wallet.
+force
+```
+
+###### Response
+standard success or error response. See
+[API.md#standard-responses](/doc/API.md#standard-responses).
 
 #### /wallet/seed [POST]
 
@@ -263,8 +317,11 @@ dictionary
 
 #### /wallet/siacoins [POST]
 
-Function: Send siacoins to an address. The outputs are arbitrarily selected
-from addresses in the wallet.
+Function: Send siacoins to an address or set of addresses. The outputs are
+arbitrarily selected from addresses in the wallet. If 'outputs' is supplied,
+'amount' and 'destination' must be empty. The number of outputs should not
+exceed 400; this may result in a transaction too large to fit in the
+transaction pool.
 
 ###### Query String Parameters
 ```
@@ -274,6 +331,10 @@ amount      // hastings
 
 // Address that is receiving the coins.
 destination // address
+
+// JSON array of outputs. The structure of each output is:
+// {"unlockhash": "<destination>", "value": "<amount>"}
+outputs
 ```
 
 ###### JSON Response
@@ -344,6 +405,34 @@ keyfiles
 standard success or error response. See
 [API.md#standard-responses](/doc/API.md#standard-responses).
 
+#### /wallet/sweep/seed [POST]
+
+Function: Scan the blockchain for outputs belonging to a seed and send them to
+an address owned by the wallet.
+
+###### Query String Parameters
+```
+// Name of the dictionary that should be used when decoding the seed. 'english'
+// is the most common choice when picking a dictionary.
+dictionary // Optional, default is english.
+
+// Dictionary-encoded phrase that corresponds to the seed being added to the
+// wallet.
+seed
+```
+
+###### JSON Response
+```javascript
+{
+  // Number of siacoins, in hastings, transferred to the wallet as a result of
+  // the sweep.
+  "coins": "123456", // hastings, big int
+
+  // Number of siafunds transferred to the wallet as a result of the sweep.
+  "funds": "1", // siafunds, big int
+}
+```
+
 #### /wallet/lock [POST]
 
 locks the wallet, wiping all secret keys. After being locked, the keys are
@@ -393,6 +482,9 @@ gets the transaction associated with a specific transaction id.
     // Array of processed inputs detailing the inputs to the transaction.
     "inputs": [
       {
+        // The id of the output being spent.
+        "parentid": "1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+
         // Type of fund represented by the input. Possible values are
         // 'siacoin input' and 'siafund input'.
         "fundtype": "siacoin input",
@@ -413,6 +505,9 @@ gets the transaction associated with a specific transaction id.
     // Outputs related to file contracts are excluded.
     "outputs": [
       {
+        // The id of the output that was created.
+        "id": "1234567890abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+
         // Type of fund is represented by the output. Possible values are
         // 'siacoin output', 'siafund output', 'claim output', and 'miner
         // payout'. Siacoin outputs and claim outputs both relate to siacoins.
@@ -519,3 +614,31 @@ encryptionpassword string
 ###### Response
 standard success or error response. See
 [API.md#standard-responses](/doc/API.md#standard-responses).
+
+#### /wallet/verify/address/:addr [GET]
+
+takes the address specified by :addr and returns a JSON response indicating if the address is valid.
+
+###### JSON Response
+```javascript
+{
+	// valid indicates if the address supplied to :addr is a valid UnlockHash.
+	"valid": true
+}
+```
+
+#### /wallet/changepassword [POST]
+
+changes the wallet's encryption password.
+
+###### Query String Parameter
+```
+// encryptionpassword is the wallet's current encryption password.
+encryptionpassword
+// newpassword is the new password for the wallet.
+newpassword
+```
+
+###### Response
+standard success or error response. See
+[#standard-responses](#standard-responses).

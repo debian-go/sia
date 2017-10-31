@@ -1,11 +1,14 @@
 package build
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"errors"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 var (
@@ -76,4 +79,72 @@ func CopyDir(source, dest string) error {
 	}
 
 	return nil
+}
+
+// ExtractTarGz extracts the specified .tar.gz file to dir, overwriting
+// existing files in the event of a name conflict.
+func ExtractTarGz(filename, dir string) error {
+	// Open the zipped archive.
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	z, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer z.Close()
+	t := tar.NewReader(z)
+
+	// Create the output directory if it does not exist.
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+
+	// Read the file entries, writing each to dir.
+	for {
+		// Read header.
+		hdr, err := t.Next()
+		if err == io.EOF {
+			return nil
+		} else if err != nil {
+			return err
+		}
+
+		path := filepath.Join(dir, hdr.Name)
+		info := hdr.FileInfo()
+		if info.IsDir() {
+			// Create directory.
+			if err := os.MkdirAll(path, info.Mode()); err != nil {
+				return err
+			}
+		} else {
+			// Create file.
+			tf, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+			if err != nil {
+				return err
+			}
+			_, err = io.Copy(tf, t)
+			tf.Close()
+			if err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// Retry will call 'fn' 'tries' times, waiting 'durationBetweenAttempts'
+// between each attempt, returning 'nil' the first time that 'fn' returns nil.
+// If 'nil' is never returned, then the final error returned by 'fn' is
+// returned.
+func Retry(tries int, durationBetweenAttempts time.Duration, fn func() error) (err error) {
+	for i := 1; i < tries; i++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		time.Sleep(durationBetweenAttempts)
+	}
+	return fn()
 }

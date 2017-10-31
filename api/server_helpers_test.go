@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"testing"
@@ -44,45 +45,14 @@ type Server struct {
 	wg sync.WaitGroup
 }
 
-// NewServer creates a new API server from the provided modules. The API will
-// require authentication using HTTP basic auth if the supplied password is not
-// the empty string. Usernames are ignored for authentication. This type of
-// authentication sends passwords in plaintext and should therefore only be
-// used if the APIaddr is localhost.
-func NewServer(APIaddr string, requiredUserAgent string, requiredPassword string, cs modules.ConsensusSet, e modules.Explorer, g modules.Gateway, h modules.Host, m modules.Miner, r modules.Renter, tp modules.TransactionPool, w modules.Wallet) (*Server, error) {
-	l, err := net.Listen("tcp", APIaddr)
+// panicClose will cloae a Server, panicking if there is an error upon close.
+func (srv *Server) panicClose() {
+	err := srv.Close()
 	if err != nil {
-		return nil, err
+		// Print the stack.
+		debug.PrintStack()
+		panic(err)
 	}
-
-	a := New(requiredUserAgent, requiredPassword, cs, e, g, h, m, r, tp, w)
-	srv := &Server{
-		api: a,
-
-		listener:          l,
-		requiredUserAgent: requiredUserAgent,
-		apiServer: &http.Server{
-			Handler: a,
-		},
-	}
-
-	return srv, nil
-}
-
-// Serve listens for and handles API calls. It is a blocking function.
-func (srv *Server) Serve() error {
-	// Block the Close() method until Serve() has finished.
-	srv.wg.Add(1)
-	defer srv.wg.Done()
-
-	// The server will run until an error is encountered or the listener is
-	// closed, via either the Close method or the signal handling above.
-	// Closing the listener will result in the benign error handled below.
-	err := srv.apiServer.Serve(srv.listener)
-	if err != nil && !strings.HasSuffix(err.Error(), "use of closed network connection") {
-		return err
-	}
-	return nil
 }
 
 // Close closes the Server's listener, causing the HTTP server to shut down.
@@ -124,16 +94,57 @@ func (srv *Server) Close() error {
 	return build.JoinErrors(errs, "\n")
 }
 
+// Serve listens for and handles API calls. It is a blocking function.
+func (srv *Server) Serve() error {
+	// Block the Close() method until Serve() has finished.
+	srv.wg.Add(1)
+	defer srv.wg.Done()
+
+	// The server will run until an error is encountered or the listener is
+	// closed, via either the Close method or the signal handling above.
+	// Closing the listener will result in the benign error handled below.
+	err := srv.apiServer.Serve(srv.listener)
+	if err != nil && !strings.HasSuffix(err.Error(), "use of closed network connection") {
+		return err
+	}
+	return nil
+}
+
+// NewServer creates a new API server from the provided modules. The API will
+// require authentication using HTTP basic auth if the supplied password is not
+// the empty string. Usernames are ignored for authentication. This type of
+// authentication sends passwords in plaintext and should therefore only be
+// used if the APIaddr is localhost.
+func NewServer(APIaddr string, requiredUserAgent string, requiredPassword string, cs modules.ConsensusSet, e modules.Explorer, g modules.Gateway, h modules.Host, m modules.Miner, r modules.Renter, tp modules.TransactionPool, w modules.Wallet) (*Server, error) {
+	l, err := net.Listen("tcp", APIaddr)
+	if err != nil {
+		return nil, err
+	}
+
+	a := New(requiredUserAgent, requiredPassword, cs, e, g, h, m, r, tp, w)
+	srv := &Server{
+		api: a,
+
+		listener:          l,
+		requiredUserAgent: requiredUserAgent,
+		apiServer: &http.Server{
+			Handler: a,
+		},
+	}
+
+	return srv, nil
+}
+
 // serverTester contains a server and a set of channels for keeping all of the
 // modules synchronized during testing.
 type serverTester struct {
 	cs        modules.ConsensusSet
+	explorer  modules.Explorer
 	gateway   modules.Gateway
 	host      modules.Host
 	miner     modules.TestMiner
 	renter    modules.Renter
 	tpool     modules.TransactionPool
-	explorer  modules.Explorer
 	wallet    modules.Wallet
 	walletKey crypto.TwofishKey
 
@@ -186,7 +197,7 @@ func assembleServerTester(key crypto.TwofishKey, testdir string) (*serverTester,
 	if err != nil {
 		return nil, err
 	}
-	r, err := renter.New(cs, w, tp, filepath.Join(testdir, modules.RenterDir))
+	r, err := renter.New(g, cs, w, tp, filepath.Join(testdir, modules.RenterDir))
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +277,7 @@ func assembleAuthenticatedServerTester(requiredPassword string, key crypto.Twofi
 	if err != nil {
 		return nil, err
 	}
-	r, err := renter.New(cs, w, tp, filepath.Join(testdir, modules.RenterDir))
+	r, err := renter.New(g, cs, w, tp, filepath.Join(testdir, modules.RenterDir))
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +362,7 @@ func assembleExplorerServerTester(testdir string) (*serverTester, error) {
 }
 
 // blankServerTester creates a server tester object that is ready for testing,
-// without any money in the wallet.
+// without mining any blocks.
 func blankServerTester(name string) (*serverTester, error) {
 	// createServerTester is expensive, and therefore should not be called
 	// during short tests.
@@ -361,10 +372,7 @@ func blankServerTester(name string) (*serverTester, error) {
 
 	// Create the server tester with key.
 	testdir := build.TempDir("api", name)
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	st, err := assembleServerTester(key, testdir)
 	if err != nil {
 		return nil, err
@@ -384,10 +392,7 @@ func createServerTester(name string) (*serverTester, error) {
 	// Create the testing directory.
 	testdir := build.TempDir("api", name)
 
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	st, err := assembleServerTester(key, testdir)
 	if err != nil {
 		return nil, err
@@ -406,7 +411,7 @@ func createServerTester(name string) (*serverTester, error) {
 
 // createAuthenticatedServerTester creates an authenticated server tester
 // object that is ready for testing, including money in the wallet and all
-// modules initalized.
+// modules initialized.
 func createAuthenticatedServerTester(name string, password string) (*serverTester, error) {
 	// createAuthenticatedServerTester should not get called during short
 	// tests, as it takes a long time to run.
@@ -417,10 +422,7 @@ func createAuthenticatedServerTester(name string, password string) (*serverTeste
 	// Create the testing directory.
 	testdir := build.TempDir("authenticated-api", name)
 
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	st, err := assembleAuthenticatedServerTester(password, key, testdir)
 	if err != nil {
 		return nil, err
@@ -448,11 +450,6 @@ func createExplorerServerTester(name string) (*serverTester, error) {
 	return st, nil
 }
 
-// non2xx returns true for non-success HTTP status codes.
-func non2xx(code int) bool {
-	return code < 200 || code > 299
-}
-
 // decodeError returns the api.Error from a API response. This method should
 // only be called if the response's status code is non-2xx. The error returned
 // may not be of type api.Error in the event of an error unmarshalling the
@@ -464,6 +461,31 @@ func decodeError(resp *http.Response) error {
 		return err
 	}
 	return apiErr
+}
+
+// non2xx returns true for non-success HTTP status codes.
+func non2xx(code int) bool {
+	return code < 200 || code > 299
+}
+
+// panicClose attempts to close a serverTester. If it fails, panic is called
+// with the error.
+func (st *serverTester) panicClose() {
+	st.server.panicClose()
+}
+
+// retry will retry a function multiple times until it returns 'nil'. It will
+// sleep the specified duration between tries. If success is not achieved in the
+// specified number of attempts, the final error is returned.
+func retry(tries int, durationBetweenAttempts time.Duration, fn func() error) (err error) {
+	for i := 0; i < tries-1; i++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		time.Sleep(durationBetweenAttempts)
+	}
+	return fn()
 }
 
 // reloadedServerTester creates a server tester where all of the persistent
@@ -505,7 +527,7 @@ func (st *serverTester) acceptContracts() error {
 	return st.stdPostAPI("/host", settingsValues)
 }
 
-// setHostStorage adds a 1 GB folder to the host.
+// setHostStorage adds a storage folder to the host.
 func (st *serverTester) setHostStorage() error {
 	values := url.Values{}
 	values.Set("path", st.dir)
@@ -521,7 +543,7 @@ func (st *serverTester) announceHost() error {
 	acceptingContractsValues.Set("acceptingcontracts", "true")
 	err := st.stdPostAPI("/host", acceptingContractsValues)
 	if err != nil {
-		return err
+		return build.ExtendErr("couldn't make an api call to the host:", err)
 	}
 
 	announceValues := url.Values{}
@@ -536,7 +558,7 @@ func (st *serverTester) announceHost() error {
 		return err
 	}
 	// wait for announcement
-	var hosts ActiveHosts
+	var hosts HostdbActiveGET
 	err = st.getAPI("/hostdb/active", &hosts)
 	if err != nil {
 		return err

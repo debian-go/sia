@@ -8,7 +8,6 @@ package types
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/encoding"
@@ -23,7 +22,7 @@ var (
 	SignatureEd25519 = Specifier{'e', 'd', '2', '5', '5', '1', '9'}
 
 	ErrEntropyKey                = errors.New("transaction tries to sign an entproy public key")
-	ErrFrivilousSignature        = errors.New("transaction contains a frivilous siganture")
+	ErrFrivolousSignature        = errors.New("transaction contains a frivolous signature")
 	ErrInvalidPubKeyIndex        = errors.New("transaction contains a signature that points to a nonexistent public key")
 	ErrInvalidUnlockHashChecksum = errors.New("provided unlock hash has an invalid checksum")
 	ErrMissingSignatures         = errors.New("transaction has inputs with missing signatures")
@@ -125,6 +124,15 @@ type (
 	}
 )
 
+// Ed25519PublicKey returns pk as a SiaPublicKey, denoting its algorithm as
+// Ed25519.
+func Ed25519PublicKey(pk crypto.PublicKey) SiaPublicKey {
+	return SiaPublicKey{
+		Algorithm: SignatureEd25519,
+		Key:       pk[:],
+	}
+}
+
 // UnlockHash calculates the root hash of a Merkle tree of the
 // UnlockConditions object. The leaves of this tree are formed by taking the
 // hash of the timelock, the hash of the public keys (one leaf each), and the
@@ -143,59 +151,50 @@ func (uc UnlockConditions) UnlockHash() UnlockHash {
 
 // SigHash returns the hash of the fields in a transaction covered by a given
 // signature. See CoveredFields for more details.
-func (t Transaction) SigHash(i int) crypto.Hash {
+func (t Transaction) SigHash(i int) (hash crypto.Hash) {
 	cf := t.TransactionSignatures[i].CoveredFields
-	var signedData []byte
+	h := crypto.NewHash()
 	if cf.WholeTransaction {
-		signedData = encoding.MarshalAll(
-			t.SiacoinInputs,
-			t.SiacoinOutputs,
-			t.FileContracts,
-			t.FileContractRevisions,
-			t.StorageProofs,
-			t.SiafundInputs,
-			t.SiafundOutputs,
-			t.MinerFees,
-			t.ArbitraryData,
-			t.TransactionSignatures[i].ParentID,
-			t.TransactionSignatures[i].PublicKeyIndex,
-			t.TransactionSignatures[i].Timelock,
-		)
+		t.marshalSiaNoSignatures(h)
+		h.Write(t.TransactionSignatures[i].ParentID[:])
+		encoding.WriteUint64(h, t.TransactionSignatures[i].PublicKeyIndex)
+		encoding.WriteUint64(h, uint64(t.TransactionSignatures[i].Timelock))
 	} else {
 		for _, input := range cf.SiacoinInputs {
-			signedData = append(signedData, encoding.Marshal(t.SiacoinInputs[input])...)
+			t.SiacoinInputs[input].MarshalSia(h)
 		}
 		for _, output := range cf.SiacoinOutputs {
-			signedData = append(signedData, encoding.Marshal(t.SiacoinOutputs[output])...)
+			t.SiacoinOutputs[output].MarshalSia(h)
 		}
 		for _, contract := range cf.FileContracts {
-			signedData = append(signedData, encoding.Marshal(t.FileContracts[contract])...)
+			t.FileContracts[contract].MarshalSia(h)
 		}
 		for _, revision := range cf.FileContractRevisions {
-			signedData = append(signedData, encoding.Marshal(t.FileContractRevisions[revision])...)
+			t.FileContractRevisions[revision].MarshalSia(h)
 		}
 		for _, storageProof := range cf.StorageProofs {
-			signedData = append(signedData, encoding.Marshal(t.StorageProofs[storageProof])...)
+			t.StorageProofs[storageProof].MarshalSia(h)
 		}
 		for _, siafundInput := range cf.SiafundInputs {
-			signedData = append(signedData, encoding.Marshal(t.SiafundInputs[siafundInput])...)
+			t.SiafundInputs[siafundInput].MarshalSia(h)
 		}
 		for _, siafundOutput := range cf.SiafundOutputs {
-			signedData = append(signedData, encoding.Marshal(t.SiafundOutputs[siafundOutput])...)
+			t.SiafundOutputs[siafundOutput].MarshalSia(h)
 		}
 		for _, minerFee := range cf.MinerFees {
-			signedData = append(signedData, encoding.Marshal(t.MinerFees[minerFee])...)
+			t.MinerFees[minerFee].MarshalSia(h)
 		}
 		for _, arbData := range cf.ArbitraryData {
-			signedData = append(signedData, encoding.Marshal(t.ArbitraryData[arbData])...)
+			encoding.WritePrefix(h, t.ArbitraryData[arbData])
 		}
 	}
 
 	for _, sig := range cf.TransactionSignatures {
-		signedData = append(signedData, encoding.Marshal(t.TransactionSignatures[sig])...)
+		t.TransactionSignatures[sig].MarshalSia(h)
 	}
 
-	return crypto.HashBytes(signedData)
+	h.Sum(hash[:0])
+	return
 }
 
 // sortedUnique checks that 'elems' is sorted, contains no repeats, and that no
@@ -327,7 +326,7 @@ func (t *Transaction) validSignatures(currentHeight BlockHeight) error {
 		// Check that sig corresponds to an entry in sigMap.
 		inSig, exists := sigMap[crypto.Hash(sig.ParentID)]
 		if !exists || inSig.remainingSignatures == 0 {
-			return ErrFrivilousSignature
+			return ErrFrivolousSignature
 		}
 		// Check that sig's key hasn't already been used.
 		_, exists = inSig.usedKeys[sig.PublicKeyIndex]
@@ -389,11 +388,4 @@ func (t *Transaction) validSignatures(currentHeight BlockHeight) error {
 	}
 
 	return nil
-}
-
-// String defines how to print a SiaPublicKey - hex is used to keep things
-// compact during logging. The key type prefix and lack of a checksum help to
-// separate it from a sia address.
-func (spk *SiaPublicKey) String() string {
-	return spk.Algorithm.String() + ":" + fmt.Sprintf("%x", spk.Key)
 }

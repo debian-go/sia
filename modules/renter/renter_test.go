@@ -56,10 +56,7 @@ func newRenterTester(name string) (*renterTester, error) {
 	if err != nil {
 		return nil, err
 	}
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	_, err = w.Encrypt(key)
 	if err != nil {
 		return nil, err
@@ -68,7 +65,7 @@ func newRenterTester(name string) (*renterTester, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := New(cs, w, tp, filepath.Join(testdir, modules.RenterDir))
+	r, err := New(g, cs, w, tp, filepath.Join(testdir, modules.RenterDir))
 	if err != nil {
 		return nil, err
 	}
@@ -119,10 +116,7 @@ func newContractorTester(name string, hdb hostDB, hc hostContractor) (*renterTes
 	if err != nil {
 		return nil, err
 	}
-	key, err := crypto.GenerateTwofishKey()
-	if err != nil {
-		return nil, err
-	}
+	key := crypto.GenerateTwofishKey()
 	_, err = w.Encrypt(key)
 	if err != nil {
 		return nil, err
@@ -182,7 +176,8 @@ func (stubContractor) Contract(modules.NetAddress) (modules.RenterContract, bool
 	return modules.RenterContract{}, false
 }
 func (stubContractor) Contracts() []modules.RenterContract                    { return nil }
-func (stubContractor) FinancialMetrics() (m modules.RenterFinancialMetrics)   { return }
+func (stubContractor) CurrentPeriod() types.BlockHeight                       { return 0 }
+func (stubContractor) IsOffline(modules.NetAddress) bool                      { return false }
 func (stubContractor) Editor(types.FileContractID) (contractor.Editor, error) { return nil, nil }
 func (stubContractor) Downloader(types.FileContractID) (contractor.Downloader, error) {
 	return nil, nil

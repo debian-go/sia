@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -41,12 +42,24 @@ var (
 		Long:  "View the current allowance, which controls how much money is spent on file contracts.",
 		Run:   wrap(renterallowancecmd),
 	}
+
+	renterAllowanceCancelCmd = &cobra.Command{
+		Use:   "cancel",
+		Short: "Cancel the current allowance",
+		Long:  "Cancel the current allowance, which controls how much money is spent on file contracts.",
+		Run:   wrap(renterallowancecancelcmd),
+	}
+
 	renterSetAllowanceCmd = &cobra.Command{
 		Use:   "setallowance [amount] [period]",
 		Short: "Set the allowance",
 		Long: `Set the amount of money that can be spent over a given period.
+
 amount is given in currency units (SC, KS, etc.)
-period is given in weeks; 1 week is roughly 1000 blocks
+
+period is given in either blocks (b), hours (h), days (d), or weeks (w). A
+block is approximately 10 minutes, so one hour is six blocks, a day is 144
+blocks, and a week is 1008 blocks.
 
 Note that setting the allowance will cause siad to immediately begin forming
 contracts! You should only set the allowance once you are fully synced and you
@@ -59,6 +72,13 @@ have a reasonable number (>30) of hosts in your hostdb.`,
 		Short: "View the Renter's contracts",
 		Long:  "View the contracts that the Renter has formed with hosts.",
 		Run:   wrap(rentercontractscmd),
+	}
+
+	renterContractsViewCmd = &cobra.Command{
+		Use:   "view [contract-id]",
+		Short: "View details of the specified contract",
+		Long:  "View all details available of the specified contract.",
+		Run:   wrap(rentercontractsviewcmd),
 	}
 
 	renterFilesDeleteCmd = &cobra.Command{
@@ -97,6 +117,13 @@ have a reasonable number (>30) of hosts in your hostdb.`,
 		Short: "Upload a file",
 		Long:  "Upload a file to [path] on the Sia network.",
 		Run:   wrap(renterfilesuploadcmd),
+	}
+
+	renterPricesCmd = &cobra.Command{
+		Use:   "prices",
+		Short: "Display the price of storage and bandwidth",
+		Long:  "Display the estimated prices of storing files, retrieving files, and creating a set of contracts",
+		Run:   wrap(renterpricescmd),
 	}
 )
 
@@ -177,7 +204,7 @@ func renterdownloadscmd() {
 		die("Could not get download queue:", err)
 	}
 	// Filter out files that have been downloaded.
-	var downloading []modules.DownloadInfo
+	var downloading []api.DownloadInfo
 	for _, file := range queue.Downloads {
 		if file.Received != file.Filesize {
 			downloading = append(downloading, file)
@@ -196,7 +223,7 @@ func renterdownloadscmd() {
 	}
 	fmt.Println()
 	// Filter out files that are downloading.
-	var downloaded []modules.DownloadInfo
+	var downloaded []api.DownloadInfo
 	for _, file := range queue.Downloads {
 		if file.Received == file.Filesize {
 			downloaded = append(downloaded, file)
@@ -226,6 +253,15 @@ func renterallowancecmd() {
 	Amount: %v
 	Period: %v blocks
 `, currencyUnits(allowance.Funds), allowance.Period)
+}
+
+// renterallowancecancelcmd cancels the current allowance.
+func renterallowancecancelcmd() {
+	err := post("/renter", "hosts=0&funds=0&period=0&renewwindow=0")
+	if err != nil {
+		die("error cancelling allowance:", err)
+	}
+	fmt.Println("Allowance cancelled.")
 }
 
 // rentersetallowancecmd allows the user to set the allowance.
@@ -274,16 +310,67 @@ func rentercontractscmd() {
 	sort.Sort(byValue(rc.Contracts))
 	fmt.Println("Contracts:")
 	w := tabwriter.NewWriter(os.Stdout, 2, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "Host\tValue\tData\tEnd Height\tID")
+	fmt.Fprintln(w, "Host\tRemaining Funds\tSpent Funds\tSpent Fees\tData\tEnd Height\tID")
 	for _, c := range rc.Contracts {
-		fmt.Fprintf(w, "%v\t%8s\t%v\t%v\t%v\n",
+		fmt.Fprintf(w, "%v\t%8s\t%8s\t%8s\t%v\t%v\t%v\n",
 			c.NetAddress,
 			currencyUnits(c.RenterFunds),
+			currencyUnits(c.TotalCost.Sub(c.RenterFunds).Sub(c.Fees)),
+			currencyUnits(c.Fees),
 			filesizeUnits(int64(c.Size)),
 			c.EndHeight,
 			c.ID)
 	}
 	w.Flush()
+}
+
+// rentercontractsviewcmd is the handler for the command `siac renter contracts <id>`.
+// It lists details of a specific contract.
+func rentercontractsviewcmd(cid string) {
+	var rc api.RenterContracts
+	err := getAPI("/renter/contracts", &rc)
+	if err != nil {
+		die("Could not get contract details: ", err)
+	}
+
+	for _, rc := range rc.Contracts {
+		if rc.ID.String() == cid {
+			var hostInfo api.HostdbHostsGET
+			err = getAPI("/hostdb/hosts/"+rc.HostPublicKey.String(), &hostInfo)
+			if err != nil {
+				die("Could not fetch details of host: ", err)
+			}
+			fmt.Printf(`
+Contract %v
+  Host: %v (Public Key: %v)
+
+  Start Height: %v
+  End Height:   %v
+
+  Total cost:        %v (Fees: %v)
+  Funds Allocated:   %v
+  Upload Spending:   %v
+  Storage Spending:  %v
+  Download Spending: %v
+  Remaining Funds:   %v
+
+  File Size: %v
+`, rc.ID, rc.NetAddress, rc.HostPublicKey.String(), rc.StartHeight, rc.EndHeight,
+				currencyUnits(rc.TotalCost),
+				currencyUnits(rc.Fees),
+				currencyUnits(rc.TotalCost.Sub(rc.Fees)),
+				currencyUnits(rc.UploadSpending),
+				currencyUnits(rc.StorageSpending),
+				currencyUnits(rc.DownloadSpending),
+				currencyUnits(rc.RenterFunds),
+				filesizeUnits(int64(rc.Size)))
+
+			printScoreBreakdown(&hostInfo)
+			return
+		}
+	}
+
+	fmt.Println("Contract not found")
 }
 
 // renterfilesdeletecmd is the handler for the command `siac renter delete [path]`.
@@ -299,11 +386,49 @@ func renterfilesdeletecmd(path string) {
 // renterfilesdownloadcmd is the handler for the comand `siac renter download [path] [destination]`.
 // Downloads a path from the Sia network to the local specified destination.
 func renterfilesdownloadcmd(path, destination string) {
-	err := get("/renter/download/" + path + "?destination=" + abs(destination))
+	destination = abs(destination)
+	done := make(chan struct{})
+	go downloadprogress(done, path)
+
+	err := get("/renter/download/" + path + "?destination=" + destination)
+	close(done)
 	if err != nil {
 		die("Could not download file:", err)
 	}
-	fmt.Printf("Downloaded '%s' to %s.\n", path, abs(destination))
+	fmt.Printf("\nDownloaded '%s' to %s.\n", path, abs(destination))
+}
+
+func downloadprogress(done chan struct{}, siapath string) {
+	time.Sleep(time.Second) // give download time to initialize
+	for {
+		select {
+		case <-done:
+			return
+
+		case <-time.Tick(time.Second):
+			// get download progress of file
+			var queue api.RenterDownloadQueue
+			err := getAPI("/renter/downloads", &queue)
+			if err != nil {
+				continue // benign
+			}
+			var d api.DownloadInfo
+			for _, d = range queue.Downloads {
+				if d.SiaPath == siapath {
+					break
+				}
+			}
+			if d.Filesize == 0 {
+				continue // file hasn't appeared in queue yet
+			}
+			pct := 100 * float64(d.Received) / float64(d.Filesize)
+			elapsed := time.Since(d.StartTime)
+			elapsed -= elapsed % time.Second // round to nearest second
+			mbps := (float64(d.Received*8) / 1e6) / time.Since(d.StartTime).Seconds()
+			fmt.Printf("\rDownloading... %5.1f%% of %v, %v elapsed, %.2f Mbps    ", pct, filesizeUnits(int64(d.Filesize)), elapsed, mbps)
+		}
+	}
+
 }
 
 // bySiaPath implements sort.Interface for [] modules.FileInfo based on the
@@ -366,12 +491,69 @@ func renterfilesrenamecmd(path, newpath string) {
 	fmt.Printf("Renamed %s to %s\n", path, newpath)
 }
 
-// renterfilesuploadcmd is the handler for the command `siac renter upload [source] [path]`.
-// Uploads the [source] file to [path] on the Sia network.
+// renterfilesuploadcmd is the handler for the command `siac renter upload
+// [source] [path]`. Uploads the [source] file to [path] on the Sia network.
+// If [source] is a directory, all files inside it will be uploaded and named
+// relative to [path].
 func renterfilesuploadcmd(source, path string) {
-	err := post("/renter/upload/"+path, "source="+abs(source))
+	stat, err := os.Stat(source)
 	if err != nil {
-		die("Could not upload file:", err)
+		die("Could not stat file or folder:", err)
 	}
-	fmt.Printf("Uploaded '%s' as %s.\n", abs(source), path)
+
+	if stat.IsDir() {
+		// folder
+		var files []string
+		err := filepath.Walk(source, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				fmt.Println("Warning: skipping file:", err)
+				return nil
+			}
+			if info.IsDir() {
+				return nil
+			}
+			files = append(files, path)
+			return nil
+		})
+		if err != nil {
+			die("Could not read folder:", err)
+		} else if len(files) == 0 {
+			die("Nothing to upload.")
+		}
+		for _, file := range files {
+			fpath, _ := filepath.Rel(source, file)
+			fpath = filepath.Join(path, fpath)
+			fpath = filepath.ToSlash(fpath)
+			err = post("/renter/upload/"+fpath, "source="+abs(file))
+			if err != nil {
+				die("Could not upload file:", err)
+			}
+		}
+		fmt.Printf("Uploaded %d files into '%s'.\n", len(files), path)
+	} else {
+		// single file
+		err = post("/renter/upload/"+path, "source="+abs(source))
+		if err != nil {
+			die("Could not upload file:", err)
+		}
+		fmt.Printf("Uploaded '%s' as %s.\n", abs(source), path)
+	}
+}
+
+// renterpricescmd is the handler for the command `siac renter prices`, which
+// displays the prices of various storage operations.
+func renterpricescmd() {
+	var rpg api.RenterPricesGET
+	err := getAPI("/renter/prices", &rpg)
+	if err != nil {
+		die("Could not read the renter prices:", err)
+	}
+
+	fmt.Println("Renter Prices (estimated):")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "\tFees for Creating a Set of Contracts:\t", currencyUnits(rpg.FormContracts))
+	fmt.Fprintln(w, "\tDownload 1 TB:\t", currencyUnits(rpg.DownloadTerabyte))
+	fmt.Fprintln(w, "\tStore 1 TB for 1 Month:\t", currencyUnits(rpg.StorageTerabyteMonth))
+	fmt.Fprintln(w, "\tUpload 1 TB:\t", currencyUnits(rpg.UploadTerabyte))
+	w.Flush()
 }

@@ -6,7 +6,6 @@ package host
 import (
 	"encoding/binary"
 	"encoding/json"
-	"sync"
 
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/modules"
@@ -71,17 +70,24 @@ func (h *Host) initRescan() error {
 	})
 
 	// Re-queue all of the action items for the storage obligations.
-	for _, so := range allObligations {
+	for i, so := range allObligations {
 		soid := so.id()
-		err0 := h.tpool.AcceptTransactionSet(so.OriginTransactionSet)
 		err1 := h.queueActionItem(h.blockHeight+resubmissionTimeout, soid)
 		err2 := h.queueActionItem(so.expiration()-revisionSubmissionBuffer, soid)
 		err3 := h.queueActionItem(so.expiration()+resubmissionTimeout, soid)
-		err = composeErrors(err0, err1, err2, err3)
+		err = composeErrors(err1, err2, err3)
 		if err != nil {
 			h.log.Println("dropping storage obligation during rescan, id", so.id())
-			return composeErrors(err, h.removeStorageObligation(so, obligationRejected))
 		}
+
+		// AcceptTransactionSet needs to be called in a goroutine to avoid a
+		// deadlock.
+		go func(i int) {
+			err := h.tpool.AcceptTransactionSet(allObligations[i].OriginTransactionSet)
+			if err != nil {
+				h.log.Println("Unable to submit contract transaction set after rescan:", soid)
+			}
+		}(i)
 	}
 	return nil
 }
@@ -119,22 +125,11 @@ func (h *Host) ProcessConsensusChange(cc modules.ConsensusChange) {
 	// terminate.
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	err := h.tg.Add()
-	if err != nil {
-		return
-	}
-	wg := new(sync.WaitGroup)
-	defer func() {
-		go func() {
-			wg.Wait()
-			h.tg.Done()
-		}()
-	}()
 
 	// Wrap the whole parsing into a single large database tx to keep things
 	// efficient.
 	var actionItems []types.FileContractID
-	err = h.db.Update(func(tx *bolt.Tx) error {
+	err := h.db.Update(func(tx *bolt.Tx) error {
 		for _, block := range cc.RevertedBlocks {
 			// Look for transactions relevant to open storage obligations.
 			for _, txn := range block.Transactions {
@@ -302,11 +297,7 @@ func (h *Host) ProcessConsensusChange(cc modules.ConsensusChange) {
 		h.log.Println(err)
 	}
 	for i := range actionItems {
-		// Add the action item to the wait group outside of the threaded call.
-		// The call to wg.Done() was established at the beginning of the
-		// function in a defer statement.
-		wg.Add(1)
-		go h.threadedHandleActionItem(actionItems[i], wg)
+		go h.threadedHandleActionItem(actionItems[i])
 	}
 
 	// Update the host's recent change pointer to point to the most recent
@@ -314,7 +305,7 @@ func (h *Host) ProcessConsensusChange(cc modules.ConsensusChange) {
 	h.recentChange = cc.ID
 
 	// Save the host.
-	err = h.save()
+	err = h.saveSync()
 	if err != nil {
 		h.log.Println("ERROR: could not save during ProcessConsensusChange:", err)
 	}

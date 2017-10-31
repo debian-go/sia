@@ -1,14 +1,16 @@
 package gateway
 
 import (
+	"errors"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/NebulousLabs/Sia/crypto"
+	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
+	"github.com/NebulousLabs/fastrand"
 )
 
 const dummyNode = "111.111.111.111:1111"
@@ -19,9 +21,10 @@ func TestAddNode(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g := newTestingGateway("TestAddNode", t)
+	t.Parallel()
+	g := newTestingGateway(t)
 	defer g.Close()
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if err := g.addNode(dummyNode); err != nil {
@@ -49,9 +52,10 @@ func TestRemoveNode(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g := newTestingGateway("TestRemoveNode", t)
+	g := newTestingGateway(t)
 	defer g.Close()
+	t.Parallel()
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if err := g.addNode(dummyNode); err != nil {
@@ -71,8 +75,8 @@ func TestRandomNode(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g := newTestingGateway("TestRandomNode", t)
+	t.Parallel()
+	g := newTestingGateway(t)
 	defer g.Close()
 
 	// Test with 0 nodes.
@@ -149,9 +153,10 @@ func TestShareNodes(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	g1 := newTestingGateway("TestShareNodes1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestShareNodes2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	// add a node to g2
@@ -168,6 +173,19 @@ func TestShareNodes(t *testing.T) {
 		t.Fatal("couldn't connect:", err)
 	}
 
+	err = build.Retry(50, 100*time.Millisecond, func() error {
+		g1.mu.Lock()
+		_, exists := g1.nodes[dummyNode]
+		g1.mu.Unlock()
+		if !exists {
+			return errors.New("node not added")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	// g1 should have received the node
 	time.Sleep(100 * time.Millisecond)
 	g1.mu.Lock()
@@ -179,10 +197,10 @@ func TestShareNodes(t *testing.T) {
 
 	// remove all nodes from both peers
 	g1.mu.Lock()
-	g1.nodes = map[modules.NetAddress]struct{}{}
+	g1.nodes = map[modules.NetAddress]*node{}
 	g1.mu.Unlock()
 	g2.mu.Lock()
-	g2.nodes = map[modules.NetAddress]struct{}{}
+	g2.nodes = map[modules.NetAddress]*node{}
 	g2.mu.Unlock()
 
 	// SharePeers should now return no peers
@@ -224,11 +242,12 @@ func TestNodesAreSharedOnConnect(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	g1 := newTestingGateway("TestNodesAreSharedOnConnect1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestNodesAreSharedOnConnect2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
-	g3 := newTestingGateway("TestNodesAreSharedOnConnect3", t)
+	g3 := newNamedTestingGateway(t, "3")
 	defer g3.Close()
 
 	// connect g2 to g1
@@ -269,8 +288,7 @@ func TestPruneNodeThreshold(t *testing.T) {
 	// Create and connect pruneNodeListLen gateways.
 	var gs []*Gateway
 	for i := 0; i < pruneNodeListLen; i++ {
-		gname := "TestPruneNodeThreshold" + strconv.Itoa(i)
-		gs = append(gs, newTestingGateway(gname, t))
+		gs = append(gs, newNamedTestingGateway(t, strconv.Itoa(i)))
 
 		// Connect this gateway to the previous gateway.
 		if i != 0 {
@@ -357,8 +375,7 @@ func TestHealthyNodeListPruning(t *testing.T) {
 	// Create and connect healthyNodeListLen*2 gateways.
 	var gs []*Gateway
 	for i := 0; i < healthyNodeListLen*2; i++ {
-		gname := "TestHealthyNodeListPruning" + strconv.Itoa(i)
-		gs = append(gs, newTestingGateway(gname, t))
+		gs = append(gs, newNamedTestingGateway(t, strconv.Itoa(i)))
 
 		// Connect this gateway to the previous gateway.
 		if i != 0 {
@@ -378,11 +395,7 @@ func TestHealthyNodeListPruning(t *testing.T) {
 		// To help speed the test up, also connect this gateway to a random
 		// previous peer.
 		if i > 2 {
-			choice, err := crypto.RandIntn(i - 2)
-			if err != nil {
-				t.Fatal(err)
-			}
-			err = gs[i].Connect(gs[choice].myAddr)
+			err := gs[i].Connect(gs[fastrand.Intn(i-2)].myAddr)
 			if err != nil {
 				t.Fatal(err)
 			}

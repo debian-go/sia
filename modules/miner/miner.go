@@ -24,50 +24,41 @@ var (
 	// new block every 'headerMemory / blockMemory' times it is
 	// called. This reduces the amount of memory used, but comes at the cost of
 	// not always having the most recent transactions.
-	HeaderMemory = func() int {
-		if build.Release == "dev" {
-			return 500
-		}
-		if build.Release == "standard" {
-			return 10000
-		}
-		if build.Release == "testing" {
-			return 50
-		}
-		panic("unrecognized build.Release")
-	}()
+	HeaderMemory = build.Select(build.Var{
+		Standard: 10000,
+		Dev:      500,
+		Testing:  50,
+	}).(int)
 
 	// BlockMemory is the maximum number of blocks the miner will store
 	// Blocks take up to 2 megabytes of memory, which is why this number is
 	// limited.
-	BlockMemory = func() int {
-		if build.Release == "dev" {
-			return 10
-		}
-		if build.Release == "standard" {
-			return 50
-		}
-		if build.Release == "testing" {
-			return 5
-		}
-		panic("unrecognized build.Release")
-	}()
+	BlockMemory = build.Select(build.Var{
+		Standard: 50,
+		Dev:      10,
+		Testing:  5,
+	}).(int)
 
 	// MaxSourceBlockAge is the maximum amount of time that is allowed to
 	// elapse between generating source blocks.
-	MaxSourceBlockAge = func() time.Duration {
-		if build.Release == "dev" {
-			return 5 * time.Second
-		}
-		if build.Release == "standard" {
-			return 30 * time.Second
-		}
-		if build.Release == "testing" {
-			return 1 * time.Second
-		}
-		panic("unrecognized build.Release")
-	}()
+	MaxSourceBlockAge = build.Select(build.Var{
+		Standard: 30 * time.Second,
+		Dev:      5 * time.Second,
+		Testing:  1 * time.Second,
+	}).(time.Duration)
 )
+
+// splitSet defines a transaction set that can be added componenet-wise to a
+// block. It's split because it doesn't necessarily represent the full set
+// prpovided by the transaction pool. Splits can be sorted so that the largest
+// and most valuable sets can be selected when picking transactions.
+type splitSet struct {
+	averageFee   types.Currency
+	size         uint64
+	transactions []types.Transaction
+}
+
+type splitSetID int
 
 // Miner struct contains all variables the miner needs
 // in order to create and submit blocks.
@@ -95,6 +86,13 @@ type Miner struct {
 	sourceBlockTime time.Time                                      // How long headers have been using the same block (different from 'recent block').
 	memProgress     int                                            // The index of the most recent header used in headerMem.
 
+	// Transaction pool variables.
+	fullSets        map[modules.TransactionSetID][]int
+	blockMapHeap    *mapHeap
+	overflowMapHeap *mapHeap
+	setCounter      int
+	splitSets       map[splitSetID]*splitSet
+
 	// CPUMiner variables.
 	miningOn bool  // indicates if the miner is supposed to be running
 	mining   bool  // indicates if the miner is actually running
@@ -111,7 +109,7 @@ type Miner struct {
 }
 
 // startupRescan will rescan the blockchain in the event that the miner
-// persistance layer has become desynchronized from the consensus persistance
+// persistence layer has become desynchronized from the consensus persistence
 // layer. This might happen if a user replaces any of the folders with backups
 // or deletes any of the folders.
 func (m *Miner) startupRescan() error {
@@ -126,7 +124,7 @@ func (m *Miner) startupRescan() error {
 		m.persist.RecentChange = modules.ConsensusChangeBeginning
 		m.persist.Height = 0
 		m.persist.Target = types.Target{}
-		return m.save()
+		return m.saveSync()
 	}()
 	if err != nil {
 		return err
@@ -170,6 +168,19 @@ func New(cs modules.ConsensusSet, tpool modules.TransactionPool, w modules.Walle
 		arbDataMem: make(map[types.BlockHeader][crypto.EntropySize]byte),
 		headerMem:  make([]types.BlockHeader, HeaderMemory),
 
+		fullSets:  make(map[modules.TransactionSetID][]int),
+		splitSets: make(map[splitSetID]*splitSet),
+		blockMapHeap: &mapHeap{
+			selectID: make(map[splitSetID]*mapElement),
+			data:     nil,
+			minHeap:  true,
+		},
+		overflowMapHeap: &mapHeap{
+			selectID: make(map[splitSetID]*mapElement),
+			data:     nil,
+			minHeap:  false,
+		},
+
 		persistDir: persistDir,
 	}
 
@@ -200,7 +211,7 @@ func New(cs modules.ConsensusSet, tpool modules.TransactionPool, w modules.Walle
 	})
 
 	// Save after synchronizing with consensus
-	err = m.save()
+	err = m.saveSync()
 	if err != nil {
 		return nil, errors.New("miner could not save during startup: " + err.Error())
 	}

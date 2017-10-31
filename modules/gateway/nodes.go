@@ -2,20 +2,29 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"time"
 
 	"github.com/NebulousLabs/Sia/build"
-	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
+	"github.com/NebulousLabs/Sia/types"
+	"github.com/NebulousLabs/fastrand"
 )
 
 var (
-	errNodeExists = errors.New("node already added")
-	errNoNodes    = errors.New("no nodes in the node list")
-	errOurAddress = errors.New("can't add our own address")
+	errNodeExists    = errors.New("node already added")
+	errNoNodes       = errors.New("no nodes in the node list")
+	errOurAddress    = errors.New("can't add our own address")
+	errPeerGenesisID = errors.New("peer has different genesis ID")
 )
+
+// A node represents a potential peer on the Sia network.
+type node struct {
+	NetAddress      modules.NetAddress `json:"netaddress"`
+	WasOutboundPeer bool               `json:"wasoutboundpeer"`
+}
 
 // addNode adds an address to the set of nodes on the network.
 func (g *Gateway) addNode(addr modules.NetAddress) error {
@@ -28,49 +37,59 @@ func (g *Gateway) addNode(addr modules.NetAddress) error {
 	} else if net.ParseIP(addr.Host()) == nil {
 		return errors.New("address must be an IP address: " + string(addr))
 	}
-	g.nodes[addr] = struct{}{}
+	g.nodes[addr] = &node{
+		NetAddress:      addr,
+		WasOutboundPeer: false,
+	}
 	return nil
 }
 
-// managedAddUntrustedNode adds an address to the set of nodes on the network, but
-// first verifies that there is a reachable node at the provided address.
-func (g *Gateway) managedAddUntrustedNode(addr modules.NetAddress) error {
-	// Performing the ping during testing does not work.
-	if build.Release == "testing" {
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		return g.addNode(addr)
-	}
-
-	// Ping the untrusted node to see whether or not there's acutally a
+// pingNode verifies that there is a reachable node at the provided address
+// by performing the Sia gateway handshake protocol.
+func (g *Gateway) pingNode(addr modules.NetAddress) error {
+	// Ping the untrusted node to see whether or not there's actually a
 	// reachable node at the provided address.
 	conn, err := g.dial(addr)
 	if err != nil {
 		return err
 	}
-	// If connection succeeds, supply an unacceptable version so that we
-	// will not be added as a peer.
-	//
-	// NOTE: this is a somewhat clunky way of specifying that you didn't
-	// actually want a connection.
-	encoding.WriteObject(conn, "0.0.0")
-	var reject string
-	err = encoding.ReadObject(conn, &reject, build.MaxEncodedVersionLength)
-	if err != nil {
-		g.log.Debugln("ERROR: version handshake ping terminated unexpectedly:", err)
-	}
-	if reject != "reject" {
-		g.log.Debugln("WARN: peer does not seem to have correctly rejected our ping:", reject)
-	}
-	conn.Close()
+	defer conn.Close()
 
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	err = g.addNode(addr)
+	// Read the node's version.
+	remoteVersion, err := connectVersionHandshake(conn, build.Version)
 	if err != nil {
 		return err
 	}
-	return g.save()
+
+	if build.VersionCmp(remoteVersion, sessionUpgradeVersion) < 0 {
+		return nil // for older versions, this is where pinging ends
+	}
+
+	// Send our header.
+	// NOTE: since we don't intend to complete the connection, we can send an
+	// inaccurate NetAddress.
+	ourHeader := sessionHeader{
+		GenesisID:  types.GenesisID,
+		UniqueID:   g.id,
+		NetAddress: modules.NetAddress(conn.LocalAddr().String()),
+	}
+	if err := exchangeOurHeader(conn, ourHeader); err != nil {
+		return err
+	}
+
+	// Read remote header.
+	var remoteHeader sessionHeader
+	if err := encoding.ReadObject(conn, &remoteHeader, maxEncodedSessionHeaderSize); err != nil {
+		return fmt.Errorf("failed to read remote header: %v", err)
+	} else if err := acceptableSessionHeader(ourHeader, remoteHeader, conn.RemoteAddr().String()); err != nil {
+		return err
+	}
+
+	// Send special rejection string.
+	if err := encoding.WriteObject(conn, modules.StopResponse); err != nil {
+		return fmt.Errorf("failed to write header rejection: %v", err)
+	}
+	return nil
 }
 
 // removeNode will remove a node from the gateway.
@@ -94,10 +113,7 @@ func (g *Gateway) randomNode() (modules.NetAddress, error) {
 	// every node on the network. If the network gets large, this algorithm
 	// will either need to be refactored, or more likely a cap on the size of
 	// g.nodes will need to be added.
-	r, err := crypto.RandIntn(len(g.nodes))
-	if err != nil {
-		return "", err
-	}
+	r := fastrand.Intn(len(g.nodes))
 	for node := range g.nodes {
 		if r <= 0 {
 			return node, nil
@@ -111,6 +127,7 @@ func (g *Gateway) randomNode() (modules.NetAddress, error) {
 // randomly selected nodes to the caller.
 func (g *Gateway) shareNodes(conn modules.PeerConn) error {
 	conn.SetDeadline(time.Now().Add(connStdDeadline))
+	remoteNA := modules.NetAddress(conn.RemoteAddr().String())
 
 	// Assemble a list of nodes to send to the peer.
 	var nodes []modules.NetAddress
@@ -118,34 +135,26 @@ func (g *Gateway) shareNodes(conn modules.PeerConn) error {
 		g.mu.RLock()
 		defer g.mu.RUnlock()
 
-		// Create a random permutation of nodes from the gateway to iterate
-		// through.
+		// Gather candidates for sharing.
 		gnodes := make([]modules.NetAddress, 0, len(g.nodes))
 		for node := range g.nodes {
-			gnodes = append(gnodes, node)
-		}
-		perm, err := crypto.Perm(len(g.nodes))
-		if err != nil {
-			g.log.Severe("Unable to get random permutation for sharing nodes")
-		}
-
-		// Iterate through the random permutation of nodes and select the
-		// desirable ones.
-		remoteNA := modules.NetAddress(conn.RemoteAddr().String())
-		for _, i := range perm {
 			// Don't share local peers with remote peers. That means that if 'node'
 			// is loopback, it will only be shared if the remote peer is also
 			// loopback. And if 'node' is private, it will only be shared if the
 			// remote peer is either the loopback or is also private.
-			node := gnodes[i]
 			if node.IsLoopback() && !remoteNA.IsLoopback() {
 				continue
 			}
 			if node.IsLocal() && !remoteNA.IsLocal() {
 				continue
 			}
+			gnodes = append(gnodes, node)
+		}
 
-			nodes = append(nodes, node)
+		// Iterate through the random permutation of nodes and select the
+		// desirable ones.
+		for _, i := range fastrand.Perm(len(gnodes)) {
+			nodes = append(nodes, gnodes[i])
 			if uint64(len(nodes)) == maxSharedNodes {
 				break
 			}
@@ -170,9 +179,9 @@ func (g *Gateway) requestNodes(conn modules.PeerConn) error {
 			g.log.Printf("WARN: peer '%v' sent the invalid addr '%v'", conn.RPCAddr(), node)
 		}
 	}
-	err := g.save()
+	err := g.saveSync()
 	if err != nil {
-		g.log.Println("WARN: failed to save nodelist after requesting nodes:", err)
+		g.log.Println("ERROR: unable to save new nodes added to the gateway:", err)
 	}
 	g.mu.Unlock()
 	return nil
@@ -185,14 +194,32 @@ func (g *Gateway) permanentNodePurger(closeChan chan struct{}) {
 	defer close(closeChan)
 
 	for {
-		// Start by sleeping for 10 minutes. This means that no nodes will be
-		// purged for the first 10 minutes that Sia is running, and that any
-		// failures to get nodes will be met by 10 minutes of waiting.
+		// Choose an amount of time to wait before attempting to prune a node.
+		// Nodes will occasionally go offline for some time, which can even be
+		// days. We don't want to too aggressively prune nodes with low-moderate
+		// uptime, as they are still useful to the network.
 		//
-		// At most one node will be contacted every 10 minutes. This minimizes
-		// the total amount of keepalive traffic on the network.
+		// But if there are a lot of nodes, we want to make sure that the node
+		// list does not become saturated with inaccessible / offline nodes.
+		// Pruning happens a lot faster when there are a lot of nodes in the
+		// gateway.
+		//
+		// This value is a ratelimit which tries to keep the nodes list in the
+		// gateawy healthy. A more complex algorithm might adjust this number
+		// according to the percentage of prune attempts that are successful
+		// (decrease prune frequency if most nodes in the database are online,
+		// increase prune frequency if more nodes in the database are offline).
+		waitTime := nodePurgeDelay
+		g.mu.RLock()
+		nodeCount := len(g.nodes)
+		g.mu.RUnlock()
+		if nodeCount > quickPruneListLen {
+			waitTime = fastNodePurgeDelay
+		}
+
+		// Sleep as a purge ratelimit.
 		select {
-		case <-time.After(nodePurgeDelay):
+		case <-time.After(waitTime):
 		case <-g.threads.StopChan():
 			// The gateway is shutting down, close out the thread.
 			return
@@ -204,7 +231,7 @@ func (g *Gateway) permanentNodePurger(closeChan chan struct{}) {
 		node, err := g.randomNode()
 		g.mu.RUnlock()
 		if err == errNoNodes {
-			// errNoNodes is a common error that will be resovled by the
+			// errNoNodes is a common error that will be resolved by the
 			// bootstrap process.
 			continue
 		} else if err != nil {
@@ -229,35 +256,17 @@ func (g *Gateway) permanentNodePurger(closeChan chan struct{}) {
 
 		// Try connecting to the random node. If the node is not reachable,
 		// remove them from the node list.
-		conn, err := g.dial(node)
-		if err != nil {
-			// NOTE: an error may be returned if the dial is cancelled
-			// partway through, which would cause the node to be pruned
-			// even though it may be a good node. Because nodes are
-			// plentiful, that's not a huge problem.
+		//
+		// NOTE: an error may be returned if the dial is canceled partway
+		// through, which would cause the node to be pruned even though it may
+		// be a good node. Because nodes are plentiful, this is an acceptable
+		// bug.
+		if err = g.pingNode(node); err != nil {
 			g.mu.Lock()
 			g.removeNode(node)
-			g.save()
 			g.mu.Unlock()
-			g.log.Debugf("INFO: removing node %q because dialing it failed: %v", node, err)
-			continue
+			g.log.Debugf("INFO: removing node %q because it could not be reached during a random scan: %v", node, err)
 		}
-
-		// If connection succeeds, supply an unacceptable version so that we
-		// will not be added as a peer.
-		//
-		// NOTE: this is a somewhat clunky way of specifying that you didn't
-		// actually want a connection.
-		encoding.WriteObject(conn, "0.0.0")
-		var reject string
-		err = encoding.ReadObject(conn, &reject, build.MaxEncodedVersionLength)
-		if err != nil {
-			g.log.Debugln("ERROR: version handshake ping terminated unexpectedly:", err)
-		}
-		if reject != "reject" {
-			g.log.Debugln("WARN: peer does not seem to have correctly rejected our ping:", reject)
-		}
-		conn.Close()
 	}
 }
 

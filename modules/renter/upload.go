@@ -13,6 +13,7 @@ import (
 
 var (
 	errInsufficientContracts = errors.New("not enough contracts to upload file")
+	errUploadDirectory       = errors.New("cannot upload directory")
 
 	// Erasure-coded piece size
 	pieceSize = modules.SectorSize - crypto.TwofishOverhead
@@ -23,7 +24,7 @@ var (
 		case "dev":
 			return 1
 		case "standard":
-			return 4
+			return 10
 		case "testing":
 			return 1
 		}
@@ -45,15 +46,54 @@ var (
 	}()
 )
 
+// validateSiapath checks that a Siapath is a legal filename.
+// ../ is disallowed to prevent directory traversal,
+// and paths must not begin with / or be empty.
+func validateSiapath(siapath string) error {
+	if strings.HasPrefix(siapath, "/") || strings.HasPrefix(siapath, "./") {
+		return errors.New("nicknames cannot begin with /")
+	}
+
+	if siapath == "" {
+		return ErrEmptyFilename
+	}
+
+	if strings.Contains(siapath, "../") {
+		return errors.New("directory traversal is not allowed")
+	}
+
+	if strings.Contains(siapath, "./") {
+		return errors.New("siapath contains invalid characters")
+	}
+
+	return nil
+}
+
+// validateSource verifies that a sourcePath meets the
+// requirements for upload.
+func validateSource(sourcePath string) error {
+	finfo, err := os.Stat(sourcePath)
+	if err != nil {
+		return err
+	}
+	if finfo.IsDir() {
+		return errUploadDirectory
+	}
+
+	return nil
+}
+
 // Upload instructs the renter to start tracking a file. The renter will
 // automatically upload and repair tracked files using a background loop.
 func (r *Renter) Upload(up modules.FileUploadParams) error {
 	// Enforce nickname rules.
-	if strings.HasPrefix(up.SiaPath, "/") {
-		return errors.New("nicknames cannot begin with /")
+	if err := validateSiapath(up.SiaPath); err != nil {
+		return err
 	}
-	if up.SiaPath == "" {
-		return ErrEmptyFilename
+
+	// Enforce source rules.
+	if err := validateSource(up.Source); err != nil {
+		return err
 	}
 
 	// Check for a nickname conflict.
@@ -91,13 +131,13 @@ func (r *Renter) Upload(up modules.FileUploadParams) error {
 		RepairPath: up.Source,
 	}
 	r.saveSync()
-	r.mu.Unlock(lockID)
-
-	// Save the .sia file to the renter directory.
 	err = r.saveFile(f)
+	r.mu.Unlock(lockID)
 	if err != nil {
 		return err
 	}
 
+	// Send the upload to the repair loop.
+	r.newRepairs <- f
 	return nil
 }

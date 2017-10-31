@@ -20,7 +20,7 @@ func (c *Contractor) ProcessConsensusChange(cc modules.ConsensusChange) {
 		}
 	}
 
-	// delete expired contracts
+	// archive expired contracts
 	var expired []types.FileContractID
 	for id, contract := range c.contracts {
 		if c.blockHeight > contract.EndHeight() {
@@ -28,11 +28,27 @@ func (c *Contractor) ProcessConsensusChange(cc modules.ConsensusChange) {
 			// depend on this contract should have taken care of any issues
 			// already.
 			expired = append(expired, id)
+			// move to oldContracts
+			c.oldContracts[id] = contract
 		}
 	}
+	// delete expired contracts (can't delete while iterating)
 	for _, id := range expired {
 		delete(c.contracts, id)
-		c.log.Debugln("INFO: deleted expired contract", id)
+		c.log.Println("INFO: archived expired contract", id)
+	}
+
+	// If we have entered the next period, update currentPeriod
+	// NOTE: "period" refers to the duration of contracts, whereas "cycle"
+	// refers to how frequently the period metrics are reset.
+	// TODO: How to make this more explicit.
+	cycleLen := c.allowance.Period - c.allowance.RenewWindow
+	if c.blockHeight > c.currentPeriod+cycleLen {
+		c.currentPeriod += cycleLen
+		// COMPATv1.0.4-lts
+		// if we were storing a special metrics contract, it will be invalid
+		// after we enter the next period.
+		delete(c.oldContracts, metricsContractID)
 	}
 
 	c.lastChange = cc.ID
@@ -42,40 +58,11 @@ func (c *Contractor) ProcessConsensusChange(cc modules.ConsensusChange) {
 	}
 	c.mu.Unlock()
 
-	// only attempt contract formation/renewal if we are synced
+	// Only attempt contract formation/renewal if we are synced
 	// (harmless if not synced, since hosts will reject our renewal attempts,
-	// (but very slow)
+	// but very slow).
 	if cc.Synced {
-		go func() {
-			// only one goroutine should be editing contracts at a time
-			if !c.editLock.TryLock() {
-				return
-			}
-			defer c.editLock.Unlock()
-
-			// renew any contracts that have entered the renew window
-			err := c.managedRenewContracts()
-			if err != nil {
-				c.log.Debugln("WARN: failed to renew contracts after processing a consensus chage:", err)
-			}
-
-			// if we don't have enough contracts, form new ones
-			c.mu.RLock()
-			a := c.allowance
-			remaining := int(a.Hosts) - len(c.contracts)
-			c.mu.RUnlock()
-			if remaining <= 0 {
-				return
-			}
-			numSectors, err := maxSectors(a, c.hdb, c.tpool)
-			if err != nil {
-				c.log.Debugln("ERROR: couldn't calculate maxSectors after processing a consensus change:", err)
-				return
-			}
-			err = c.managedFormAllowanceContracts(remaining, numSectors, a)
-			if err != nil {
-				c.log.Debugln("WARN: failed to form contracts after processing a consensus change:", err)
-			}
-		}()
+		// Perform the contract maintenance in a separate thread.
+		go c.threadedContractMaintenance()
 	}
 }

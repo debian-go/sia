@@ -6,15 +6,16 @@ import (
 
 // TestApiClient tests that the API client connects to the server tester and
 // can call and decode routes correctly.
-func TestIntegrationApiClient(t *testing.T) {
+func TestApiClient(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	st, err := createServerTester("TestApiClient")
+	t.Parallel()
+	st, err := createServerTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	c := NewClient(st.server.listener.Addr().String(), "")
 	var gatewayInfo GatewayGET
@@ -27,16 +28,17 @@ func TestIntegrationApiClient(t *testing.T) {
 // TestAuthenticatedApiClient tests that the API client connects to an
 // authenticated server tester and can call and decode routes correctly, using
 // the correct password.
-func TestIntegrationAuthenticatedApiClient(t *testing.T) {
+func TestAuthenticatedApiClient(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
+	t.Parallel()
 	testpass := "testPassword"
-	st, err := createAuthenticatedServerTester("TestAuthenticatedApiClient", testpass)
+	st, err := createAuthenticatedServerTester(t.Name(), testpass)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	c := NewClient(st.server.listener.Addr().String(), "")
 	var walletAddress WalletAddressGET

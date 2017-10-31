@@ -4,11 +4,12 @@ os:
   - linux
 
 go:
-  - 1.6
+  - 1.8
 
 install:
   - make dependencies
   - test -z "$(go fmt ./...)"
+  - glyphcheck ./...
   - make
 
 script: make test && make test-long && make cover && make bench
@@ -18,6 +19,7 @@ sudo: false
 branches:
   only:
     - master
+    - staging
 
 notifications:
   email: false

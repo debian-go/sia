@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NebulousLabs/Sia/api"
 	"github.com/NebulousLabs/Sia/build"
@@ -39,15 +40,16 @@ type (
 
 	// SiaConstants is a struct listing all of the constants in use.
 	SiaConstants struct {
-		GenesisTimestamp      types.Timestamp   `json:"genesistimestamp"`
-		BlockSizeLimit        uint64            `json:"blocksizelimit"`
-		BlockFrequency        types.BlockHeight `json:"blockfrequency"`
-		TargetWindow          types.BlockHeight `json:"targetwindow"`
-		MedianTimestampWindow uint64            `json:"mediantimestampwindow"`
-		FutureThreshold       types.Timestamp   `json:"futurethreshold"`
-		SiafundCount          types.Currency    `json:"siafundcount"`
-		SiafundPortion        *big.Rat          `json:"siafundportion"`
-		MaturityDelay         types.BlockHeight `json:"maturitydelay"`
+		BlockFrequency         types.BlockHeight `json:"blockfrequency"`
+		BlockSizeLimit         uint64            `json:"blocksizelimit"`
+		ExtremeFutureThreshold types.Timestamp   `json:"extremefuturethreshold"`
+		FutureThreshold        types.Timestamp   `json:"futurethreshold"`
+		GenesisTimestamp       types.Timestamp   `json:"genesistimestamp"`
+		MaturityDelay          types.BlockHeight `json:"maturitydelay"`
+		MedianTimestampWindow  uint64            `json:"mediantimestampwindow"`
+		SiafundCount           types.Currency    `json:"siafundcount"`
+		SiafundPortion         *big.Rat          `json:"siafundportion"`
+		TargetWindow           types.BlockHeight `json:"targetwindow"`
 
 		InitialCoinbase uint64 `json:"initialcoinbase"`
 		MinimumCoinbase uint64 `json:"minimumcoinbase"`
@@ -304,15 +306,16 @@ func (srv *Server) daemonUpdateHandlerPOST(w http.ResponseWriter, _ *http.Reques
 // debugConstantsHandler prints a json file containing all of the constants.
 func (srv *Server) daemonConstantsHandler(w http.ResponseWriter, _ *http.Request, _ httprouter.Params) {
 	sc := SiaConstants{
-		GenesisTimestamp:      types.GenesisTimestamp,
-		BlockSizeLimit:        types.BlockSizeLimit,
-		BlockFrequency:        types.BlockFrequency,
-		TargetWindow:          types.TargetWindow,
-		MedianTimestampWindow: types.MedianTimestampWindow,
-		FutureThreshold:       types.FutureThreshold,
-		SiafundCount:          types.SiafundCount,
-		SiafundPortion:        types.SiafundPortion,
-		MaturityDelay:         types.MaturityDelay,
+		BlockFrequency:         types.BlockFrequency,
+		BlockSizeLimit:         types.BlockSizeLimit,
+		ExtremeFutureThreshold: types.ExtremeFutureThreshold,
+		FutureThreshold:        types.FutureThreshold,
+		GenesisTimestamp:       types.GenesisTimestamp,
+		MaturityDelay:          types.MaturityDelay,
+		MedianTimestampWindow:  types.MedianTimestampWindow,
+		SiafundCount:           types.SiafundCount,
+		SiafundPortion:         types.SiafundPortion,
+		TargetWindow:           types.TargetWindow,
 
 		InitialCoinbase: types.InitialCoinbase,
 		MinimumCoinbase: types.MinimumCoinbase,
@@ -380,6 +383,23 @@ func NewServer(bindAddr, requiredUserAgent, requiredPassword string) (*Server, e
 		listener: l,
 		httpServer: &http.Server{
 			Handler: mux,
+
+			// set reasonable timeout windows for requests, to prevent the Sia API
+			// server from leaking file descriptors due to slow, disappearing, or
+			// unreliable API clients.
+
+			// ReadTimeout defines the maximum amount of time allowed to fully read
+			// the request body. This timeout is applied to every handler in the
+			// server.
+			ReadTimeout: time.Minute * 5,
+
+			// ReadHeaderTimeout defines the amount of time allowed to fully read the
+			// request headers.
+			ReadHeaderTimeout: time.Minute * 2,
+
+			// IdleTimeout defines the maximum duration a HTTP Keep-Alive connection
+			// the API is kept open with no activity before closing.
+			IdleTimeout: time.Minute * 5,
 		},
 	}
 

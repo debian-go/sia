@@ -37,7 +37,7 @@ func TestViewAdded(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	wt, err := createWalletTester("TestViewAdded")
+	wt, err := createWalletTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestDoubleSignError(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	wt, err := createWalletTester("TestDoubleSignError")
+	wt, err := createWalletTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestConcurrentBuilders(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	wt, err := createWalletTester("TestConcurrentBuilders")
+	wt, err := createWalletTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestConcurrentBuildersSingleOutput(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	wt, err := createWalletTester("TestConcurrentBuildersSingleOutput")
+	wt, err := createWalletTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,11 +303,6 @@ func TestConcurrentBuildersSingleOutput(t *testing.T) {
 	err = wt.addBlockNoPayout()
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	// Check that there is only one output in the wallet.
-	if len(wt.wallet.siacoinOutputs) != 1 {
-		t.Fatal("wallet is supposed to have only one output", wt.wallet.siacoinOutputs)
 	}
 
 	// Get a baseline balance for the wallet.
@@ -371,7 +366,7 @@ func TestParallelBuilders(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	wt, err := createWalletTester("TestParallelBuilders")
+	wt, err := createWalletTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}

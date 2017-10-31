@@ -1,131 +1,114 @@
 package hostdb
 
 import (
-	"bytes"
+	"math"
 
 	"github.com/NebulousLabs/Sia/modules"
 	"github.com/NebulousLabs/Sia/types"
 )
 
-// A hostEntry represents a host on the network.
-type hostEntry struct {
-	modules.HostDBEntry
-
-	FirstSeen   types.BlockHeight
-	Weight      types.Currency
-	Reliability types.Currency
-	Online      bool
-}
-
-// insertHost adds a host entry to the state. The host will be inserted into
-// the set of all hosts, and if it is online and responding to requests it will
-// be put into the list of active hosts.
-//
-// TODO: Function should return an error.
-func (hdb *HostDB) insertHost(host modules.HostDBEntry) {
-	// Remove garbage hosts and local hosts (but allow local hosts in testing).
-	if err := host.NetAddress.IsValid(); err != nil {
-		hdb.log.Debugf("WARN: host '%v' has an invalid NetAddress: %v", host.NetAddress, err)
+// updateHostDBEntry updates a HostDBEntries's historic interactions if more
+// than one block passed since the last update. This should be called every time
+// before the recent interactions are updated.  if passedTime is e.g. 10, this
+// means that the recent interactions were updated 10 blocks ago but never
+// since. So we need to apply the decay of 1 block before we append the recent
+// interactions from 10 blocks ago and then apply the decay of 9 more blocks in
+// which the recent interactions have been 0
+func updateHostHistoricInteractions(host *modules.HostDBEntry, bh types.BlockHeight) {
+	// Check that the last historic update was not in the future.
+	if host.LastHistoricUpdate >= bh {
+		// The hostdb may be performing a rescan, or maybe no time has passed
+		// since the last update, so there is nothing to do.
 		return
 	}
-	// Don't do anything if we've already seen this host and the public key is
-	// the same.
-	if knownHost, exists := hdb.allHosts[host.NetAddress]; exists && bytes.Equal(host.PublicKey.Key, knownHost.PublicKey.Key) {
-		return
+	passedTime := bh - host.LastHistoricUpdate
+
+	// tmp float64 values for more accurate decay
+	hsi := host.HistoricSuccessfulInteractions
+	hfi := host.HistoricFailedInteractions
+
+	// Apply the decay of a single block.
+	decay := historicInteractionDecay
+	hsi *= decay
+	hfi *= decay
+
+	// Apply the recent interactions of that single block. Recent interactions
+	// cannot represent more than recentInteractionWeightLimit of historic
+	// interactions, unless there are less than historicInteractionDecayLimit
+	// total interactions, and then the recent interactions cannot count for
+	// more than recentInteractionWeightLimit of the decay limit.
+	rsi := float64(host.RecentSuccessfulInteractions)
+	rfi := float64(host.RecentFailedInteractions)
+	if hsi+hfi > historicInteractionDecayLimit {
+		if rsi+rfi > recentInteractionWeightLimit*(hsi+hfi) {
+			adjustment := recentInteractionWeightLimit * (hsi + hfi) / (rsi + rfi)
+			rsi *= adjustment
+			rfi *= adjustment
+		}
+	} else {
+		if rsi+rfi > recentInteractionWeightLimit*historicInteractionDecayLimit {
+			adjustment := recentInteractionWeightLimit * historicInteractionDecayLimit / (rsi + rfi)
+			rsi *= adjustment
+			rfi *= adjustment
+		}
+	}
+	hsi += rsi
+	hfi += rfi
+
+	// Apply the decay of the rest of the blocks
+	if passedTime > 1 && hsi+hfi > historicInteractionDecayLimit {
+		decay := math.Pow(historicInteractionDecay, float64(passedTime-1))
+		hsi *= decay
+		hfi *= decay
 	}
 
-	// Create hostEntry and add to allHosts.
-	h := &hostEntry{
-		FirstSeen:   hdb.blockHeight,
-		HostDBEntry: host,
-		Reliability: DefaultReliability,
-	}
-	hdb.allHosts[host.NetAddress] = h
+	// Set new values
+	host.HistoricSuccessfulInteractions = hsi
+	host.HistoricFailedInteractions = hfi
+	host.RecentSuccessfulInteractions = 0
+	host.RecentFailedInteractions = 0
 
-	// Add the host to the scan queue. If the scan is successful, the host
-	// will be placed in activeHosts.
-	hdb.queueHostEntry(h)
+	// Update the time of the last update
+	host.LastHistoricUpdate = bh
 }
 
-// Remove deletes an entry from the hostdb.
-func (hdb *HostDB) removeHost(addr modules.NetAddress) error {
-	// See if the node is in the set of active hosts.
-	node, exists := hdb.activeHosts[addr]
-	if exists {
-		node.removeNode()
-		delete(hdb.activeHosts, addr)
-	}
-
-	// Remove the node from all hosts.
-	delete(hdb.allHosts, addr)
-
-	return nil
-}
-
-// Host returns the HostSettings associated with the specified NetAddress. If
-// no matching host is found, Host returns false.
-func (hdb *HostDB) Host(addr modules.NetAddress) (modules.HostDBEntry, bool) {
+// IncrementSuccessfulInteractions increments the number of successful
+// interactions with a host for a given key
+func (hdb *HostDB) IncrementSuccessfulInteractions(key types.SiaPublicKey) {
 	hdb.mu.Lock()
 	defer hdb.mu.Unlock()
-	entry, ok := hdb.allHosts[addr]
-	if !ok || entry == nil {
-		return modules.HostDBEntry{}, false
+
+	// Fetch the host.
+	host, haveHost := hdb.hostTree.Select(key)
+	if !haveHost {
+		return
 	}
-	return entry.HostDBEntry, true
+
+	// Update historic values if necessary
+	updateHostHistoricInteractions(&host, hdb.blockHeight)
+
+	// Increment the successful interactions
+	host.RecentSuccessfulInteractions++
+	hdb.hostTree.Modify(host)
 }
 
-// ActiveHosts returns the hosts that can be randomly selected out of the
-// hostdb, sorted by preference.
-func (hdb *HostDB) ActiveHosts() (activeHosts []modules.HostDBEntry) {
-	hdb.mu.RLock()
-	numHosts := len(hdb.activeHosts)
-	hdb.mu.RUnlock()
+// IncrementFailedInteractions increments the number of failed interactions with
+// a host for a given key
+func (hdb *HostDB) IncrementFailedInteractions(key types.SiaPublicKey) {
+	hdb.mu.Lock()
+	defer hdb.mu.Unlock()
 
-	// Get the hosts using RandomHosts so that they are in sorted order.
-	sortedHosts := hdb.RandomHosts(numHosts, nil)
-	return sortedHosts
-}
-
-// AllHosts returns all of the hosts known to the hostdb, including the
-// inactive ones.
-func (hdb *HostDB) AllHosts() (allHosts []modules.HostDBEntry) {
-	hdb.mu.RLock()
-	defer hdb.mu.RUnlock()
-
-	for _, entry := range hdb.allHosts {
-		allHosts = append(allHosts, entry.HostDBEntry)
+	// Fetch the host.
+	host, haveHost := hdb.hostTree.Select(key)
+	if !haveHost || !hdb.online {
+		// If we are offline it probably wasn't the host's fault
+		return
 	}
-	return
-}
 
-// AverageContractPrice returns the average price of a host.
-func (hdb *HostDB) AverageContractPrice() types.Currency {
-	// maybe a more sophisticated way of doing this
-	var totalPrice types.Currency
-	sampleSize := 18
-	hosts := hdb.RandomHosts(sampleSize, nil)
-	if len(hosts) == 0 {
-		return totalPrice
-	}
-	for _, host := range hosts {
-		totalPrice = totalPrice.Add(host.ContractPrice)
-	}
-	return totalPrice.Div64(uint64(len(hosts)))
-}
+	// Update historic values if necessary
+	updateHostHistoricInteractions(&host, hdb.blockHeight)
 
-// IsOffline reports whether a host is offline. If the HostDB has no record of
-// the host, IsOffline will return false.
-//
-// TODO: Is this behavior that makes sense?
-func (hdb *HostDB) IsOffline(addr modules.NetAddress) bool {
-	hdb.mu.RLock()
-	defer hdb.mu.RUnlock()
-
-	if _, ok := hdb.activeHosts[addr]; ok {
-		return false
-	}
-	if h, ok := hdb.allHosts[addr]; ok {
-		return !h.Online
-	}
-	return false
+	// Increment the failed interactions
+	host.RecentFailedInteractions++
+	hdb.hostTree.Modify(host)
 }

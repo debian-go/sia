@@ -6,15 +6,22 @@ package types
 // it is cryptographically unlikely that any two objects would share an id.
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 
+	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/crypto"
+	"github.com/NebulousLabs/Sia/encoding"
 )
 
 const (
 	SpecifierLen = 16
+
+	// UnlockHashChecksumSize is the size of the checksum used to verify
+	// human-readable addresses. It is not a crypytographically secure
+	// checksum, it's merely intended to prevent typos. 6 is chosen because it
+	// brings the total size of the address to 38 bytes, leaving 2 bytes for
+	// potential version additions in the future.
+	UnlockHashChecksumSize = 6
 )
 
 // These Specifiers are used internally when calculating a type's ID. See
@@ -127,22 +134,44 @@ type (
 		UnlockHash UnlockHash `json:"unlockhash"`
 		ClaimStart Currency   `json:"claimstart"`
 	}
+
+	// An UnlockHash is a specially constructed hash of the UnlockConditions type.
+	// "Locked" values can be unlocked by providing the UnlockConditions that hash
+	// to a given UnlockHash. See UnlockConditions.UnlockHash for details on how the
+	// UnlockHash is constructed.
+	UnlockHash crypto.Hash
 )
 
 // ID returns the id of a transaction, which is taken by marshalling all of the
 // fields except for the signatures and taking the hash of the result.
 func (t Transaction) ID() TransactionID {
-	return TransactionID(crypto.HashAll(
-		t.SiacoinInputs,
-		t.SiacoinOutputs,
-		t.FileContracts,
-		t.FileContractRevisions,
-		t.StorageProofs,
-		t.SiafundInputs,
-		t.SiafundOutputs,
-		t.MinerFees,
-		t.ArbitraryData,
-	))
+	// Get the transaction id by hashing all data minus the signatures.
+	var txid TransactionID
+	h := crypto.NewHash()
+	t.marshalSiaNoSignatures(h)
+	h.Sum(txid[:0])
+
+	// Sanity check in debug builds to make sure that the ids are going to be
+	// the same.
+	if build.DEBUG {
+		verify := TransactionID(crypto.HashAll(
+			t.SiacoinInputs,
+			t.SiacoinOutputs,
+			t.FileContracts,
+			t.FileContractRevisions,
+			t.StorageProofs,
+			t.SiafundInputs,
+			t.SiafundOutputs,
+			t.MinerFees,
+			t.ArbitraryData,
+		))
+
+		if verify != txid {
+			panic("TransactionID is not marshalling correctly")
+		}
+	}
+
+	return txid
 }
 
 // SiacoinOutputID returns the ID of a siacoin output at the given index,
@@ -150,19 +179,36 @@ func (t Transaction) ID() TransactionID {
 // Specifier, all of the fields in the transaction (except the signatures),
 // and output index.
 func (t Transaction) SiacoinOutputID(i uint64) SiacoinOutputID {
-	return SiacoinOutputID(crypto.HashAll(
-		SpecifierSiacoinOutput,
-		t.SiacoinInputs,
-		t.SiacoinOutputs,
-		t.FileContracts,
-		t.FileContractRevisions,
-		t.StorageProofs,
-		t.SiafundInputs,
-		t.SiafundOutputs,
-		t.MinerFees,
-		t.ArbitraryData,
-		i,
-	))
+	// Create the id.
+	var id SiacoinOutputID
+	h := crypto.NewHash()
+	h.Write(SpecifierSiacoinOutput[:])
+	t.marshalSiaNoSignatures(h) // Encode non-signature fields into hash.
+	encoding.WriteUint64(h, i)  // Writes index of this output.
+	h.Sum(id[:0])
+
+	// Sanity check - verify that the optimized code is always returning the
+	// same ids as the unoptimized code.
+	if build.DEBUG {
+		verificationID := SiacoinOutputID(crypto.HashAll(
+			SpecifierSiacoinOutput,
+			t.SiacoinInputs,
+			t.SiacoinOutputs,
+			t.FileContracts,
+			t.FileContractRevisions,
+			t.StorageProofs,
+			t.SiafundInputs,
+			t.SiafundOutputs,
+			t.MinerFees,
+			t.ArbitraryData,
+			i,
+		))
+		if id != verificationID {
+			panic("SiacoinOutputID is not marshalling correctly")
+		}
+	}
+
+	return id
 }
 
 // FileContractID returns the ID of a file contract at the given index, which
@@ -170,19 +216,35 @@ func (t Transaction) SiacoinOutputID(i uint64) SiacoinOutputID {
 // all of the fields in the transaction (except the signatures), and the
 // contract index.
 func (t Transaction) FileContractID(i uint64) FileContractID {
-	return FileContractID(crypto.HashAll(
-		SpecifierFileContract,
-		t.SiacoinInputs,
-		t.SiacoinOutputs,
-		t.FileContracts,
-		t.FileContractRevisions,
-		t.StorageProofs,
-		t.SiafundInputs,
-		t.SiafundOutputs,
-		t.MinerFees,
-		t.ArbitraryData,
-		i,
-	))
+	var id FileContractID
+	h := crypto.NewHash()
+	h.Write(SpecifierFileContract[:])
+	t.marshalSiaNoSignatures(h) // Encode non-signature fields into hash.
+	encoding.WriteUint64(h, i)  // Writes index of this output.
+	h.Sum(id[:0])
+
+	// Sanity check - verify that the optimized code is always returning the
+	// same ids as the unoptimized code.
+	if build.DEBUG {
+		verificationID := FileContractID(crypto.HashAll(
+			SpecifierFileContract,
+			t.SiacoinInputs,
+			t.SiacoinOutputs,
+			t.FileContracts,
+			t.FileContractRevisions,
+			t.StorageProofs,
+			t.SiafundInputs,
+			t.SiafundOutputs,
+			t.MinerFees,
+			t.ArbitraryData,
+			i,
+		))
+		if id != verificationID {
+			panic("FileContractID is not marshalling correctly")
+		}
+	}
+
+	return id
 }
 
 // SiafundOutputID returns the ID of a SiafundOutput at the given index, which
@@ -190,19 +252,34 @@ func (t Transaction) FileContractID(i uint64) FileContractID {
 // all of the fields in the transaction (except the signatures), and output
 // index.
 func (t Transaction) SiafundOutputID(i uint64) SiafundOutputID {
-	return SiafundOutputID(crypto.HashAll(
-		SpecifierSiafundOutput,
-		t.SiacoinInputs,
-		t.SiacoinOutputs,
-		t.FileContracts,
-		t.FileContractRevisions,
-		t.StorageProofs,
-		t.SiafundInputs,
-		t.SiafundOutputs,
-		t.MinerFees,
-		t.ArbitraryData,
-		i,
-	))
+	var id SiafundOutputID
+	h := crypto.NewHash()
+	h.Write(SpecifierSiafundOutput[:])
+	t.marshalSiaNoSignatures(h) // Encode non-signature fields into hash.
+	encoding.WriteUint64(h, i)  // Writes index of this output.
+	h.Sum(id[:0])
+
+	// Sanity check - verify that the optimized code is always returning the
+	// same ids as the unoptimized code.
+	if build.DEBUG {
+		verificationID := SiafundOutputID(crypto.HashAll(
+			SpecifierSiafundOutput,
+			t.SiacoinInputs,
+			t.SiacoinOutputs,
+			t.FileContracts,
+			t.FileContractRevisions,
+			t.StorageProofs,
+			t.SiafundInputs,
+			t.SiafundOutputs,
+			t.MinerFees,
+			t.ArbitraryData,
+			i,
+		))
+		if id != verificationID {
+			panic("SiafundOutputID is not marshalling correctly")
+		}
+	}
+	return id
 }
 
 // SiacoinOutputSum returns the sum of all the siacoin outputs in the
@@ -233,105 +310,4 @@ func (t Transaction) SiacoinOutputSum() (sum Currency) {
 // the siafund output is spent. The ID is the hash the SiafundOutputID.
 func (id SiafundOutputID) SiaClaimOutputID() SiacoinOutputID {
 	return SiacoinOutputID(crypto.HashObject(id))
-}
-
-// MarshalJSON marshals a specifier as a string.
-func (s Specifier) MarshalJSON() ([]byte, error) {
-	return json.Marshal(s.String())
-}
-
-// String returns the specifier as a string, trimming any trailing zeros.
-func (s Specifier) String() string {
-	var i int
-	for i = range s {
-		if s[i] == 0 {
-			break
-		}
-	}
-	return string(s[:i])
-}
-
-// UnmarshalJSON decodes the json string of the specifier.
-func (s *Specifier) UnmarshalJSON(b []byte) error {
-	var str string
-	if err := json.Unmarshal(b, &str); err != nil {
-		return err
-	}
-	copy(s[:], str)
-	return nil
-}
-
-// MarshalJSON marshals an id as a hex string.
-func (tid TransactionID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(tid.String())
-}
-
-// String prints the id in hex.
-func (tid TransactionID) String() string {
-	return fmt.Sprintf("%x", tid[:])
-}
-
-// UnmarshalJSON decodes the json hex string of the id.
-func (tid *TransactionID) UnmarshalJSON(b []byte) error {
-	return (*crypto.Hash)(tid).UnmarshalJSON(b)
-}
-
-// MarshalJSON marshals an id as a hex string.
-func (oid OutputID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(oid.String())
-}
-
-// String prints the id in hex.
-func (oid OutputID) String() string {
-	return fmt.Sprintf("%x", oid[:])
-}
-
-// UnmarshalJSON decodes the json hex string of the id.
-func (oid *OutputID) UnmarshalJSON(b []byte) error {
-	return (*crypto.Hash)(oid).UnmarshalJSON(b)
-}
-
-// MarshalJSON marshals an id as a hex string.
-func (scoid SiacoinOutputID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(scoid.String())
-}
-
-// String prints the id in hex.
-func (scoid SiacoinOutputID) String() string {
-	return fmt.Sprintf("%x", scoid[:])
-}
-
-// UnmarshalJSON decodes the json hex string of the id.
-func (scoid *SiacoinOutputID) UnmarshalJSON(b []byte) error {
-	return (*crypto.Hash)(scoid).UnmarshalJSON(b)
-}
-
-// MarshalJSON marshals an id as a hex string.
-func (fcid FileContractID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(fcid.String())
-}
-
-// String prints the id in hex.
-func (fcid FileContractID) String() string {
-	return fmt.Sprintf("%x", fcid[:])
-}
-
-// UnmarshalJSON decodes the json hex string of the id.
-func (fcid *FileContractID) UnmarshalJSON(b []byte) error {
-	return (*crypto.Hash)(fcid).UnmarshalJSON(b)
-}
-
-// MarshalJSON marshals an id as a hex string.
-func (sfoid SiafundOutputID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(sfoid.String())
-}
-
-// String prints the id in hex.
-func (sfoid SiafundOutputID) String() string {
-	return fmt.Sprintf("%x", sfoid[:])
-}
-
-// UnmarshalJSON decodes the json hex string of the id.
-func (sfoid *SiafundOutputID) UnmarshalJSON(b []byte) error {
-	return (*crypto.Hash)(sfoid).UnmarshalJSON(b)
 }

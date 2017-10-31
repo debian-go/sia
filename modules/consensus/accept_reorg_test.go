@@ -3,6 +3,7 @@ package consensus
 import (
 	"testing"
 
+	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/modules"
 	"github.com/NebulousLabs/Sia/types"
 )
@@ -164,7 +165,7 @@ func TestIntegrationSimpleReorg(t *testing.T) {
 		t.SkipNow()
 	}
 	t.Parallel()
-	rs := createReorgSets("TestIntegrationSimpleReorg")
+	rs := createReorgSets(t.Name())
 	defer rs.Close()
 
 	// Give a simple block to cstMain.
@@ -182,7 +183,7 @@ func TestIntegrationSiacoinReorg(t *testing.T) {
 		t.SkipNow()
 	}
 	t.Parallel()
-	rs := createReorgSets("TestIntegrationSiacoinReorg")
+	rs := createReorgSets(t.Name())
 	defer rs.Close()
 
 	// Give a siacoin block to cstMain.
@@ -200,7 +201,7 @@ func TestIntegrationValidStorageProofReorg(t *testing.T) {
 		t.SkipNow()
 	}
 	t.Parallel()
-	rs := createReorgSets("TestIntegrationValidStorageProofReorg")
+	rs := createReorgSets(t.Name())
 	defer rs.Close()
 
 	// Give a series of blocks containing a file contract and a valid storage
@@ -219,7 +220,7 @@ func TestIntegrationMissedStorageProofReorg(t *testing.T) {
 		t.SkipNow()
 	}
 	t.Parallel()
-	rs := createReorgSets("TestIntegrationMissedStorageProofReorg")
+	rs := createReorgSets(t.Name())
 	defer rs.Close()
 
 	// Give a series of blocks containing a file contract and a valid storage
@@ -238,7 +239,7 @@ func TestIntegrationFileContractRevisionReorg(t *testing.T) {
 		t.SkipNow()
 	}
 	t.Parallel()
-	rs := createReorgSets("TestIntegrationFileContractRevisionReorg")
+	rs := createReorgSets(t.Name())
 	defer rs.Close()
 
 	// Give a series of blocks containing a file contract and a valid storage
@@ -253,11 +254,11 @@ func TestIntegrationFileContractRevisionReorg(t *testing.T) {
 // TestIntegrationComplexReorg stacks up blocks of all types into a single
 // blockchain that undergoes a massive reorg as a stress test to the codebase.
 func TestIntegrationComplexReorg(t *testing.T) {
-	if testing.Short() {
+	if testing.Short() || !build.VLONG {
 		t.SkipNow()
 	}
 	t.Parallel()
-	rs := createReorgSets("TestIntegrationComplexReorg")
+	rs := createReorgSets(t.Name())
 	defer rs.Close()
 
 	// Give a wide variety of block types to cstMain.
@@ -286,7 +287,7 @@ func TestBuriedBadFork(t *testing.T) {
 		t.SkipNow()
 	}
 	t.Parallel()
-	cst, err := createConsensusSetTester("TestBuriedBadFork")
+	cst, err := createConsensusSetTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}

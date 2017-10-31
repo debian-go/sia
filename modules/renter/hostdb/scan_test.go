@@ -1,267 +1,184 @@
 package hostdb
 
 import (
-	"net"
+	"errors"
 	"testing"
 	"time"
 
-	"github.com/NebulousLabs/Sia/crypto"
-	"github.com/NebulousLabs/Sia/encoding"
 	"github.com/NebulousLabs/Sia/modules"
 	"github.com/NebulousLabs/Sia/types"
 )
 
-// TestDecrementReliability tests the decrementReliability method.
-func TestDecrementReliability(t *testing.T) {
-	hdb := bareHostDB()
-
-	// Decrementing a non-existent host should be a no-op.
-	// NOTE: can't check any post-conditions here; only indication of correct
-	// behavior is that the test doesn't panic.
-	hdb.decrementReliability("foo", types.NewCurrency64(0))
-
-	// Add a host to allHosts and activeHosts. Decrementing it should remove it
-	// from activeHosts.
-	h := new(hostEntry)
-	h.NetAddress = "foo"
-	h.Reliability = types.NewCurrency64(1)
-	hdb.allHosts[h.NetAddress] = h
-	hdb.activeHosts[h.NetAddress] = &hostNode{hostEntry: h}
-	hdb.decrementReliability(h.NetAddress, types.NewCurrency64(0))
-	if len(hdb.ActiveHosts()) != 0 {
-		t.Error("decrementing did not remove host from activeHosts")
-	}
-
-	// Decrement reliability to 0. This should remove the host from allHosts.
-	hdb.decrementReliability(h.NetAddress, h.Reliability)
-	if len(hdb.AllHosts()) != 0 {
-		t.Error("decrementing did not remove host from allHosts")
-	}
-}
-
-// probeDialer is used to test the threadedProbeHosts method. A simple type
-// alias is used so that it can easily be redefined during testing, allowing
-// multiple behaviors to be tested.
-type probeDialer func(modules.NetAddress, time.Duration) (net.Conn, error)
-
-func (dial probeDialer) DialTimeout(addr modules.NetAddress, timeout time.Duration) (net.Conn, error) {
-	return dial(addr, timeout)
-}
-
-// TestThreadedProbeHosts tests the threadedProbeHosts method.
-func TestThreadedProbeHosts(t *testing.T) {
-	t.Skip("incompatible concurrency patterns")
+// TestUpdateEntry checks that the various components of updateEntry are
+// working correctly.
+func TestUpdateEntry(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	hdb := bareHostDB()
-	hdb.persist = &memPersist{}
-
-	// create a host to send to threadedProbeHosts
-	sk, pk, err := crypto.GenerateKeyPair()
+	hdbt, err := newHDBTesterDeps(t.Name(), disableScanLoopDeps{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := new(hostEntry)
-	h.NetAddress = "foo"
-	h.AcceptingContracts = true
-	h.PublicKey = types.SiaPublicKey{
-		Algorithm: types.SignatureEd25519,
-		Key:       pk[:],
-	}
-	h.Reliability = baseWeight // enough to withstand a few failures
 
-	// define a helper function for running threadedProbeHosts. We send the
-	// hostEntry, close the channel, and then call threadedProbeHosts.
-	// threadedProbeHosts will receive the host, loop once, and return after
-	// seeing the channel has closed.
-	runProbe := func(h *hostEntry) {
-		hdb.scanPool <- h
-		close(hdb.scanPool)
-		hdb.threadedProbeHosts()
-		// reset hdb.scanPool
-		hdb.scanPool = make(chan *hostEntry, 1)
+	// Test 1: try calling updateEntry with a blank host. Result should be a
+	// host with len 2 scan history.
+	someErr := errors.New("testing err")
+	entry1 := modules.HostDBEntry{
+		PublicKey: types.SiaPublicKey{
+			Key: []byte{1},
+		},
+	}
+	entry2 := modules.HostDBEntry{
+		PublicKey: types.SiaPublicKey{
+			Key: []byte{2},
+		},
 	}
 
-	// make the dial fail
-	hdb.dialer = probeDialer(func(modules.NetAddress, time.Duration) (net.Conn, error) {
-		return nil, net.UnknownNetworkError("fail")
-	})
-	runProbe(h)
-	if len(hdb.ActiveHosts()) != 0 {
-		t.Error("unresponsive host was added")
+	// Try inserting the first entry. Result in the host tree should be a host
+	// with a scan history length of two.
+	hdbt.hdb.updateEntry(entry1, nil)
+	updatedEntry, exists := hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
+	}
+	if len(updatedEntry.ScanHistory) != 2 {
+		t.Fatal("new entry was not given two scanning history entries")
+	}
+	if !updatedEntry.ScanHistory[0].Timestamp.Before(updatedEntry.ScanHistory[1].Timestamp) {
+		t.Error("new entry was not provided with a sorted scanning history")
+	}
+	if !updatedEntry.ScanHistory[0].Success || !updatedEntry.ScanHistory[1].Success {
+		t.Error("new entry was not given success values despite a successful scan")
 	}
 
-	// make the RPC fail
-	hdb.dialer = probeDialer(func(modules.NetAddress, time.Duration) (net.Conn, error) {
-		ourPipe, theirPipe := net.Pipe()
-		ourPipe.Close()
-		return theirPipe, nil
-	})
-	runProbe(h)
-	if len(hdb.ActiveHosts()) != 0 {
-		t.Error("unresponsive host was added")
+	// Try inserting the second entry, but with an error. Results should largely
+	// be the same.
+	hdbt.hdb.updateEntry(entry2, someErr)
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry2.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
+	}
+	if len(updatedEntry.ScanHistory) != 2 {
+		t.Fatal("new entry was not given two scanning history entries")
+	}
+	if !updatedEntry.ScanHistory[0].Timestamp.Before(updatedEntry.ScanHistory[1].Timestamp) {
+		t.Error("new entry was not provided with a sorted scanning history")
+	}
+	if updatedEntry.ScanHistory[0].Success || updatedEntry.ScanHistory[1].Success {
+		t.Error("new entry was not given success values despite a successful scan")
 	}
 
-	// normal host
-	hdb.dialer = probeDialer(func(modules.NetAddress, time.Duration) (net.Conn, error) {
-		// create an in-memory conn and spawn a goroutine to handle our half
-		ourConn, theirConn := net.Pipe()
-		go func() {
-			// read the RPC
-			encoding.ReadObject(ourConn, new(types.Specifier), types.SpecifierLen)
-			// write host settings
-			crypto.WriteSignedObject(ourConn, modules.HostExternalSettings{
-				AcceptingContracts: true,
-				NetAddress:         "probed",
-			}, sk)
-			ourConn.Close()
-		}()
-		return theirConn, nil
-	})
-	runProbe(h)
-	if len(hdb.ActiveHosts()) != 1 {
-		t.Error("host was not added")
+	// Insert the first entry twice more, with no error. There should be 4
+	// entries, and the timestamps should be strictly increasing.
+	hdbt.hdb.updateEntry(entry1, nil)
+	hdbt.hdb.updateEntry(entry1, nil)
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
 	}
-}
-
-// TestThreadedProbeHostsCorruption tests the threadedProbeHosts method,
-// specifically checking for corruption of the hostdb if the weight of a host
-// changes after a scan.
-func TestThreadedProbeHostsCorruption(t *testing.T) {
-	t.Skip("incompatible concurrency patterns")
-	if testing.Short() {
-		t.SkipNow()
+	if len(updatedEntry.ScanHistory) != 4 {
+		t.Fatal("new entry was not given two scanning history entries")
+	}
+	if !updatedEntry.ScanHistory[1].Timestamp.Before(updatedEntry.ScanHistory[2].Timestamp) {
+		t.Error("new entry was not provided with a sorted scanning history")
+	}
+	if !updatedEntry.ScanHistory[2].Timestamp.Before(updatedEntry.ScanHistory[3].Timestamp) {
+		t.Error("new entry was not provided with a sorted scanning history")
+	}
+	if !updatedEntry.ScanHistory[2].Success || !updatedEntry.ScanHistory[3].Success {
+		t.Error("new entries did not get added with successful timestamps")
 	}
 
-	hdb := bareHostDB()
-	hdb.persist = &memPersist{}
+	// Add a non-successful scan and verify that it is registered properly.
+	hdbt.hdb.updateEntry(entry1, someErr)
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
+	}
+	if len(updatedEntry.ScanHistory) != 5 {
+		t.Fatal("new entry was not given two scanning history entries")
+	}
+	if !updatedEntry.ScanHistory[3].Success || updatedEntry.ScanHistory[4].Success {
+		t.Error("new entries did not get added with successful timestamps")
+	}
 
-	// create a host to send to threadedProbeHosts
-	sk, pk, err := crypto.GenerateKeyPair()
+	// Prefix an invalid entry to have a scan from more than maxHostDowntime
+	// days ago. At less than minScans total, the host should not be deleted
+	// upon update.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry2.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
+	}
+	updatedEntry.ScanHistory = append([]modules.HostDBScan{{}}, updatedEntry.ScanHistory...)
+	err = hdbt.hdb.hostTree.Modify(updatedEntry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := new(hostEntry)
-	h.NetAddress = "foo"
-	h.AcceptingContracts = true
-	h.PublicKey = types.SiaPublicKey{
-		Algorithm: types.SignatureEd25519,
-		Key:       pk[:],
+	// Entry should still exist.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry2.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
 	}
-	h.Reliability = baseWeight // enough to withstand a few failures
-
-	// define a helper function for running threadedProbeHosts. We send the
-	// hostEntry, close the channel, and then call threadedProbeHosts.
-	// threadedProbeHosts will receive the host, loop once, and return after
-	// seeing the channel has closed.
-	runProbe := func(h *hostEntry) {
-		hdb.scanPool <- h
-		close(hdb.scanPool)
-		hdb.threadedProbeHosts()
-		// reset hdb.scanPool
-		hdb.scanPool = make(chan *hostEntry, 1)
+	// Add enough entries to get to minScans total length. When that length is
+	// reached, the entry should be deleted.
+	for i := len(updatedEntry.ScanHistory); i < minScans; i++ {
+		hdbt.hdb.updateEntry(entry2, someErr)
+	}
+	// The entry should no longer exist in the hostdb, wiped for being offline.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry2.PublicKey)
+	if exists {
+		t.Fatal("entry should have been purged for being offline for too long")
 	}
 
-	// Add a normal host.
-	hdb.dialer = probeDialer(func(modules.NetAddress, time.Duration) (net.Conn, error) {
-		// create an in-memory conn and spawn a goroutine to handle our half
-		ourConn, theirConn := net.Pipe()
-		go func() {
-			// read the RPC
-			encoding.ReadObject(ourConn, new(types.Specifier), types.SpecifierLen)
-			// write host settings
-			crypto.WriteSignedObject(ourConn, modules.HostExternalSettings{
-				AcceptingContracts: true,
-				StoragePrice:       types.NewCurrency64(15e6),
-				NetAddress:         "probed",
-			}, sk)
-			ourConn.Close()
-		}()
-		return theirConn, nil
-	})
-	runProbe(h)
-	if len(hdb.ActiveHosts()) != 1 {
-		t.Error("host was not added")
+	// Trigger compression on entry1 by adding a past scan and then adding
+	// unsuccessful scans until compression happens.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
 	}
-
-	// Add the host again, this time changing the storage price, which will
-	// change the weight of the host, which at one point would cause a
-	// corruption of the host tree.
-	hdb.dialer = probeDialer(func(modules.NetAddress, time.Duration) (net.Conn, error) {
-		// create an in-memory conn and spawn a goroutine to handle our half
-		ourConn, theirConn := net.Pipe()
-		go func() {
-			// read the RPC
-			encoding.ReadObject(ourConn, new(types.Specifier), types.SpecifierLen)
-			// write host settings
-			crypto.WriteSignedObject(ourConn, modules.HostExternalSettings{
-				AcceptingContracts: true,
-				StoragePrice:       types.NewCurrency64(15e3), // Lower than the previous, to cause a higher weight.
-				NetAddress:         "probed",
-			}, sk)
-			ourConn.Close()
-		}()
-		return theirConn, nil
-	})
-	runProbe(h)
-	if len(hdb.ActiveHosts()) != 1 {
-		t.Error("host was not added")
-	}
-
-	// Check that the host tree has not been corrupted.
-	err = repeatCheck(hdb.hostTree)
+	updatedEntry.ScanHistory = append([]modules.HostDBScan{{Timestamp: time.Now().Add(maxHostDowntime * -1).Add(time.Hour * -1)}}, updatedEntry.ScanHistory...)
+	err = hdbt.hdb.hostTree.Modify(updatedEntry)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
-	err = uniformTreeVerification(hdb, 1)
+	for i := len(updatedEntry.ScanHistory); i <= minScans; i++ {
+		hdbt.hdb.updateEntry(entry1, someErr)
+	}
+	// The result should be compression, and not the entry getting deleted.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("entry should not have been purged for being offline for too long")
+	}
+	if len(updatedEntry.ScanHistory) != minScans {
+		t.Error("expecting a different number of scans", len(updatedEntry.ScanHistory))
+	}
+	if updatedEntry.HistoricDowntime == 0 {
+		t.Error("host reporting historic downtime?")
+	}
+	if updatedEntry.HistoricUptime != 0 {
+		t.Error("host not reporting historic uptime?")
+	}
+
+	// Repeat triggering compression, but with uptime this time.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("Entry did not get inserted into the host tree")
+	}
+	updatedEntry.ScanHistory = append([]modules.HostDBScan{{Success: true, Timestamp: time.Now().Add(time.Hour * 24 * 11 * -1)}}, updatedEntry.ScanHistory...)
+	err = hdbt.hdb.hostTree.Modify(updatedEntry)
 	if err != nil {
-		t.Error(err)
+		t.Fatal(err)
 	}
-}
-
-// TestThreadedScan tests the threadedScan method.
-func TestThreadedScan(t *testing.T) {
-	hdb := bareHostDB()
-	hdb.persist = &memPersist{}
-
-	// use a real sleeper; this will prevent threadedScan from looping too
-	// quickly.
-	hdb.sleeper = stdSleeper{}
-	// use a dummy dialer that always fails
-	hdb.dialer = probeDialer(func(modules.NetAddress, time.Duration) (net.Conn, error) {
-		return nil, net.UnknownNetworkError("fail")
-	})
-
-	// create a host to be scanned
-	h := new(hostEntry)
-	h.NetAddress = "foo"
-	h.Reliability = types.NewCurrency64(1)
-	hdb.activeHosts[h.NetAddress] = &hostNode{hostEntry: h}
-
-	// perform one scan
-	go hdb.threadedScan()
-
-	// host should be sent down scanPool
-	select {
-	case <-hdb.scanPool:
-	case <-time.After(time.Second):
-		t.Error("host was not scanned")
+	hdbt.hdb.updateEntry(entry1, someErr)
+	// The result should be compression, and not the entry getting deleted.
+	updatedEntry, exists = hdbt.hdb.hostTree.Select(entry1.PublicKey)
+	if !exists {
+		t.Fatal("entry should not have been purged for being offline for too long")
 	}
-
-	// remove the host from activeHosts and add it to allHosts
-	hdb.mu.Lock()
-	delete(hdb.activeHosts, h.NetAddress)
-	hdb.allHosts[h.NetAddress] = h
-	hdb.mu.Unlock()
-
-	// perform one scan
-	go hdb.threadedScan()
-
-	// host should be sent down scanPool
-	select {
-	case <-hdb.scanPool:
-	case <-time.After(time.Second):
-		t.Error("host was not scanned")
+	if len(updatedEntry.ScanHistory) != minScans+1 {
+		t.Error("expecting a different number of scans")
+	}
+	if updatedEntry.HistoricUptime == 0 {
+		t.Error("host not reporting historic uptime?")
 	}
 }

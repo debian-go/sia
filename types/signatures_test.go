@@ -1,10 +1,23 @@
 package types
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/NebulousLabs/Sia/crypto"
 )
+
+// TestEd25519PublicKey tests the Ed25519PublicKey function.
+func TestEd25519PublicKey(t *testing.T) {
+	_, pk := crypto.GenerateKeyPair()
+	spk := Ed25519PublicKey(pk)
+	if spk.Algorithm != SignatureEd25519 {
+		t.Error("Ed25519PublicKey created key with wrong algorithm specifier:", spk.Algorithm)
+	}
+	if !bytes.Equal(spk.Key, pk[:]) {
+		t.Error("Ed25519PublicKey created key with wrong data")
+	}
+}
 
 // TestUnlockHash runs the UnlockHash code.
 func TestUnlockHash(t *testing.T) {
@@ -168,10 +181,7 @@ func TestTransactionValidCoveredFields(t *testing.T) {
 // Transaction type.
 func TestTransactionValidSignatures(t *testing.T) {
 	// Create keys for use in signing and verifying.
-	sk, pk, err := crypto.GenerateKeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
+	sk, pk := crypto.GenerateKeyPair()
 
 	// Create UnlockConditions with 3 keys, 2 of which are required. The first
 	// possible key is a standard signature. The second key is an unknown
@@ -228,29 +238,20 @@ func TestTransactionValidSignatures(t *testing.T) {
 	sigHash0 := txn.SigHash(0)
 	sigHash1 := txn.SigHash(1)
 	sigHash2 := txn.SigHash(2)
-	sig0, err := crypto.SignHash(sigHash0, sk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sig1, err := crypto.SignHash(sigHash1, sk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sig2, err := crypto.SignHash(sigHash2, sk)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sig0 := crypto.SignHash(sigHash0, sk)
+	sig1 := crypto.SignHash(sigHash1, sk)
+	sig2 := crypto.SignHash(sigHash2, sk)
 	txn.TransactionSignatures[0].Signature = sig0[:]
 	txn.TransactionSignatures[1].Signature = sig1[:]
 	txn.TransactionSignatures[2].Signature = sig2[:]
 
 	// Check that the signing was successful.
-	err = txn.validSignatures(10)
+	err := txn.validSignatures(10)
 	if err != nil {
 		t.Error(err)
 	}
 
-	// Corrupt one of the sigantures.
+	// Corrupt one of the signatures.
 	sig0[0]++
 	txn.TransactionSignatures[0].Signature = sig0[:]
 	err = txn.validSignatures(10)
@@ -288,10 +289,10 @@ func TestTransactionValidSignatures(t *testing.T) {
 	}
 	txn.SiafundInputs = txn.SiafundInputs[:len(txn.SiafundInputs)-1]
 
-	// Add a frivilous signature
+	// Add a frivolous signature
 	txn.TransactionSignatures = append(txn.TransactionSignatures, TransactionSignature{})
 	err = txn.validSignatures(10)
-	if err != ErrFrivilousSignature {
+	if err != ErrFrivolousSignature {
 		t.Error(err)
 	}
 	txn.TransactionSignatures = txn.TransactionSignatures[:len(txn.TransactionSignatures)-1]
@@ -351,18 +352,5 @@ func TestTransactionValidSignatures(t *testing.T) {
 	err = txn.validSignatures(10)
 	if err != ErrMissingSignatures {
 		t.Error(err)
-	}
-}
-
-// TestSiaPublicKeyString does a quick check to verify that the String method
-// on the SiaPublicKey is producing the expected output.
-func TestSiaPublicKeyString(t *testing.T) {
-	spk := SiaPublicKey{
-		Algorithm: SignatureEd25519,
-		Key:       make([]byte, 32),
-	}
-
-	if spk.String() != "ed25519:0000000000000000000000000000000000000000000000000000000000000000" {
-		t.Error("got wrong value for spk.String():", spk.String())
 	}
 }

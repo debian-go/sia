@@ -4,10 +4,13 @@ package wallet
 // multisig, but there are no automated tests to verify that.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/NebulousLabs/bolt"
 
 	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/crypto"
@@ -43,24 +46,21 @@ type spendableKey struct {
 // Wallet is an object that tracks balances, creates keys and addresses,
 // manages building and sending transactions.
 type Wallet struct {
-	// unlocked indicates whether the wallet is currently storing secret keys
-	// in memory. subscribed indicates whether the wallet has subscribed to the
-	// consensus set yet - the wallet is unable to subscribe to the consensus
-	// set until it has been unlocked for the first time. The primary seed is
-	// used to generate new addresses for the wallet.
+	// encrypted indicates whether the wallet has been encrypted (i.e.
+	// initialized). unlocked indicates whether the wallet is currently
+	// storing secret keys in memory. subscribed indicates whether the wallet
+	// has subscribed to the consensus set yet - the wallet is unable to
+	// subscribe to the consensus set until it has been unlocked for the first
+	// time. The primary seed is used to generate new addresses for the
+	// wallet.
+	encrypted   bool
 	unlocked    bool
 	subscribed  bool
-	persist     WalletPersist
 	primarySeed modules.Seed
 
-	// The wallet's dependencies. The items 'consensusSetHeight' and
-	// 'siafundPool' are tracked separately from the consensus set to minimize
-	// the number of queries that the wallet needs to make to the consensus
-	// set; queries to the consensus set are very slow.
-	cs                 modules.ConsensusSet
-	tpool              modules.TransactionPool
-	consensusSetHeight types.BlockHeight
-	siafundPool        types.Currency
+	// The wallet's dependencies.
+	cs    modules.ConsensusSet
+	tpool modules.TransactionPool
 
 	// The following set of fields are responsible for tracking the confirmed
 	// outputs, and for being able to spend them. The seeds are used to derive
@@ -68,39 +68,34 @@ type Wallet struct {
 	// from the seeds, when checking new outputs or spending outputs, the seeds
 	// are not referenced at all. The seeds are only stored so that the user
 	// may access them.
-	//
-	// siacoinOutptus, siafundOutputs, and spentOutputs are kept so that they
-	// can be scanned when trying to fund transactions.
-	seeds          []modules.Seed
-	keys           map[types.UnlockHash]spendableKey
-	siacoinOutputs map[types.SiacoinOutputID]types.SiacoinOutput
-	siafundOutputs map[types.SiafundOutputID]types.SiafundOutput
-	spentOutputs   map[types.OutputID]types.BlockHeight
+	seeds     []modules.Seed
+	keys      map[types.UnlockHash]spendableKey
+	lookahead map[types.UnlockHash]uint64
 
-	// The following fields are kept to track transaction history.
-	// processedTransactions are stored in chronological order, and have a map for
-	// constant time random access. The set of full transactions is kept as
-	// well, ordering can be determined by the processedTransactions slice.
+	// unconfirmedProcessedTransactions tracks unconfirmed transactions.
 	//
-	// The unconfirmed transactions are kept the same way, except without the
-	// random access. It is assumed that the list of unconfirmed transactions
-	// will be small enough that this will not be a problem.
-	//
-	// historicOutputs is kept so that the values of transaction inputs can be
-	// determined. historicOutputs is never cleared, but in general should be
-	// small compared to the list of transactions.
-	processedTransactions            []modules.ProcessedTransaction
-	processedTransactionMap          map[types.TransactionID]*modules.ProcessedTransaction
+	// TODO: Replace this field with a linked list. Currently when a new
+	// transaction set diff is provided, the entire array needs to be
+	// reallocated. Since this can happen tens of times per second, and the
+	// array can have tens of thousands of elements, it's a performance issue.
+	unconfirmedSets                  map[modules.TransactionSetID][]types.TransactionID
 	unconfirmedProcessedTransactions []modules.ProcessedTransaction
 
-	// TODO: Storing the whole set of historic outputs is expensive and
-	// unnecessary. There's a better way to do it.
-	historicOutputs     map[types.OutputID]types.Currency
-	historicClaimStarts map[types.SiafundOutputID]types.Currency
+	// The wallet's database tracks its seeds, keys, outputs, and
+	// transactions. A global db transaction is maintained in memory to avoid
+	// excessive disk writes. Any operations involving dbTx must hold an
+	// exclusive lock.
+	db   *persist.BoltDatabase
+	dbTx *bolt.Tx
 
 	persistDir string
 	log        *persist.Logger
 	mu         sync.RWMutex
+
+	// A separate TryMutex is used to protect against concurrent unlocking or
+	// initialization.
+	scanLock siasync.TryMutex
+
 	// The wallet's ThreadGroup tells tracked functions to shut down and
 	// blocks until they have all exited before returning from Close.
 	tg siasync.ThreadGroup
@@ -124,15 +119,10 @@ func New(cs modules.ConsensusSet, tpool modules.TransactionPool, persistDir stri
 		cs:    cs,
 		tpool: tpool,
 
-		keys:           make(map[types.UnlockHash]spendableKey),
-		siacoinOutputs: make(map[types.SiacoinOutputID]types.SiacoinOutput),
-		siafundOutputs: make(map[types.SiafundOutputID]types.SiafundOutput),
-		spentOutputs:   make(map[types.OutputID]types.BlockHeight),
+		keys:      make(map[types.UnlockHash]spendableKey),
+		lookahead: make(map[types.UnlockHash]uint64),
 
-		processedTransactionMap: make(map[types.TransactionID]*modules.ProcessedTransaction),
-
-		historicOutputs:     make(map[types.OutputID]types.Currency),
-		historicClaimStarts: make(map[types.SiafundOutputID]types.Currency),
+		unconfirmedSets: make(map[modules.TransactionSetID][]types.TransactionID),
 
 		persistDir: persistDir,
 	}
@@ -140,6 +130,23 @@ func New(cs modules.ConsensusSet, tpool modules.TransactionPool, persistDir stri
 	if err != nil {
 		return nil, err
 	}
+
+	// begin the initial transaction
+	w.dbTx, err = w.db.Begin(true)
+	if err != nil {
+		w.log.Critical("ERROR: failed to start database update:", err)
+	}
+
+	// make sure we commit on shutdown
+	w.tg.AfterStop(func() {
+		err := w.dbTx.Commit()
+		if err != nil {
+			w.log.Println("ERROR: failed to apply database update:", err)
+			w.dbTx.Rollback()
+		}
+	})
+	go w.threadedDBUpdate()
+
 	return w, nil
 }
 
@@ -160,9 +167,6 @@ func (w *Wallet) Close() error {
 		}
 	}
 
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	w.cs.Unsubscribe(w)
 	w.tpool.Unsubscribe(w)
 
@@ -178,10 +182,22 @@ func (w *Wallet) AllAddresses() []types.UnlockHash {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	addrs := make(types.UnlockHashSlice, 0, len(w.keys))
+	addrs := make([]types.UnlockHash, 0, len(w.keys))
 	for addr := range w.keys {
 		addrs = append(addrs, addr)
 	}
-	sort.Sort(addrs)
+	sort.Slice(addrs, func(i, j int) bool {
+		return bytes.Compare(addrs[i][:], addrs[j][:]) < 0
+	})
 	return addrs
+}
+
+// Rescanning reports whether the wallet is currently rescanning the
+// blockchain.
+func (w *Wallet) Rescanning() bool {
+	rescanning := !w.scanLock.TryLock()
+	if !rescanning {
+		w.scanLock.Unlock()
+	}
+	return rescanning
 }

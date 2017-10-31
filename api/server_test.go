@@ -11,11 +11,12 @@ func TestExplorerPreset(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	st, err := createExplorerServerTester("TestExplorerPreset")
+	t.Parallel()
+	st, err := createExplorerServerTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	// Try calling a legal endpoint without a user agent.
 	err = st.stdGetAPIUA("/explorer", "")
@@ -30,12 +31,9 @@ func TestReloading(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
+	t.Parallel()
+	st, err := createServerTester(t.Name())
 
-	// Create a server tester, which will have blocks mined. Then get the
-	// reloaded version of the server tester (all persistence files get copied
-	// to a new folder, and then the modules are pointed at the new folders
-	// during calls to 'New')
-	st, err := createServerTester("TestReloading")
 	height := st.server.api.cs.Height()
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +46,7 @@ func TestReloading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rst.server.Close()
+	defer rst.server.panicClose()
 	if height != rst.server.api.cs.Height() {
 		t.Error("server heights do not match")
 	}
@@ -70,12 +68,12 @@ func TestAuthentication(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	st, err := createAuthenticatedServerTester("TestAuthentication", "password")
+	t.Parallel()
+	st, err := createAuthenticatedServerTester(t.Name(), "password")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	testGETURL := "http://" + st.server.listener.Addr().String() + "/wallet/seeds"
 	testPOSTURL := "http://" + st.server.listener.Addr().String() + "/host/announce"

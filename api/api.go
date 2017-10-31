@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/modules"
@@ -118,6 +119,36 @@ func RequirePassword(h httprouter.Handle, password string) httprouter.Handle {
 	}
 }
 
+// cleanCloseHandler wraps the entire API, ensuring that underlying conns are
+// not leaked if the rmeote end closes the connection before the underlying
+// handler finishes.
+func cleanCloseHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Close this file handle either when the function completes or when the
+		// connection is done.
+		done := make(chan struct{})
+		go func(w http.ResponseWriter, r *http.Request) {
+			defer close(done)
+			next.ServeHTTP(w, r)
+		}(w, r)
+		select {
+		case <-done:
+		case <-r.Context().Done():
+		}
+
+		// Sanity check - thread should not take more than an hour to return. This
+		// must be done in a goroutine, otherwise the server will not close the
+		// underlying socket for this API call.
+		go func() {
+			select {
+			case <-done:
+			case <-time.After(time.Minute * 60):
+				build.Severe("api call is taking more than 60 minutes to return:", r.URL.Path)
+			}
+		}()
+	})
+}
+
 // API encapsulates a collection of modules and implements a http.Handler
 // to access their methods.
 type API struct {
@@ -156,10 +187,12 @@ func New(requiredUserAgent string, requiredPassword string, cs modules.Consensus
 	// Register API handlers
 	router := httprouter.New()
 	router.NotFound = http.HandlerFunc(UnrecognizedCallHandler)
+	router.RedirectTrailingSlash = false
 
 	// Consensus API Calls
 	if api.cs != nil {
 		router.GET("/consensus", api.consensusHandler)
+		router.POST("/consensus/validate/transactionset", api.consensusValidateTransactionsetHandler)
 	}
 
 	// Explorer API Calls
@@ -182,6 +215,7 @@ func New(requiredUserAgent string, requiredPassword string, cs modules.Consensus
 		router.GET("/host", api.hostHandlerGET)                                                   // Get the host status.
 		router.POST("/host", RequirePassword(api.hostHandlerPOST, requiredPassword))              // Change the settings of the host.
 		router.POST("/host/announce", RequirePassword(api.hostAnnounceHandler, requiredPassword)) // Announce the host to the network.
+		router.GET("/host/estimatescore", api.hostEstimateScoreGET)
 
 		// Calls pertaining to the storage manager that the host uses.
 		router.GET("/host/storage", api.storageHandler)
@@ -207,6 +241,7 @@ func New(requiredUserAgent string, requiredPassword string, cs modules.Consensus
 		router.GET("/renter/contracts", api.renterContractsHandler)
 		router.GET("/renter/downloads", api.renterDownloadsHandler)
 		router.GET("/renter/files", api.renterFilesHandler)
+		router.GET("/renter/prices", api.renterPricesHandler)
 
 		// TODO: re-enable these routes once the new .sia format has been
 		// standardized and implemented.
@@ -217,16 +252,22 @@ func New(requiredUserAgent string, requiredPassword string, cs modules.Consensus
 
 		router.POST("/renter/delete/*siapath", RequirePassword(api.renterDeleteHandler, requiredPassword))
 		router.GET("/renter/download/*siapath", RequirePassword(api.renterDownloadHandler, requiredPassword))
+		router.GET("/renter/downloadasync/*siapath", RequirePassword(api.renterDownloadAsyncHandler, requiredPassword))
 		router.POST("/renter/rename/*siapath", RequirePassword(api.renterRenameHandler, requiredPassword))
 		router.POST("/renter/upload/*siapath", RequirePassword(api.renterUploadHandler, requiredPassword))
 
 		// HostDB endpoints.
-		router.GET("/hostdb/active", api.renterHostsActiveHandler)
-		router.GET("/hostdb/all", api.renterHostsAllHandler)
+		router.GET("/hostdb/active", api.hostdbActiveHandler)
+		router.GET("/hostdb/all", api.hostdbAllHandler)
+		router.GET("/hostdb/hosts/:pubkey", api.hostdbHostsHandler)
 	}
 
-	// TransactionPool API Calls
+	// Transaction pool API Calls
 	if api.tpool != nil {
+		router.GET("/tpool/fee", api.tpoolFeeHandlerGET)
+		router.GET("/tpool/raw/:id", api.tpoolRawHandlerGET)
+		router.POST("/tpool/raw", api.tpoolRawHandlerPOST)
+
 		// TODO: re-enable this route once the transaction pool API has been finalized
 		//router.GET("/transactionpool/transactions", api.transactionpoolTransactionsHandler)
 	}
@@ -239,20 +280,24 @@ func New(requiredUserAgent string, requiredPassword string, cs modules.Consensus
 		router.GET("/wallet/addresses", api.walletAddressesHandler)
 		router.GET("/wallet/backup", RequirePassword(api.walletBackupHandler, requiredPassword))
 		router.POST("/wallet/init", RequirePassword(api.walletInitHandler, requiredPassword))
+		router.POST("/wallet/init/seed", RequirePassword(api.walletInitSeedHandler, requiredPassword))
 		router.POST("/wallet/lock", RequirePassword(api.walletLockHandler, requiredPassword))
 		router.POST("/wallet/seed", RequirePassword(api.walletSeedHandler, requiredPassword))
 		router.GET("/wallet/seeds", RequirePassword(api.walletSeedsHandler, requiredPassword))
 		router.POST("/wallet/siacoins", RequirePassword(api.walletSiacoinsHandler, requiredPassword))
 		router.POST("/wallet/siafunds", RequirePassword(api.walletSiafundsHandler, requiredPassword))
 		router.POST("/wallet/siagkey", RequirePassword(api.walletSiagkeyHandler, requiredPassword))
+		router.POST("/wallet/sweep/seed", RequirePassword(api.walletSweepSeedHandler, requiredPassword))
 		router.GET("/wallet/transaction/:id", api.walletTransactionHandler)
 		router.GET("/wallet/transactions", api.walletTransactionsHandler)
 		router.GET("/wallet/transactions/:addr", api.walletTransactionsAddrHandler)
+		router.GET("/wallet/verify/address/:addr", api.walletVerifyAddressHandler)
 		router.POST("/wallet/unlock", RequirePassword(api.walletUnlockHandler, requiredPassword))
+		router.POST("/wallet/changepassword", RequirePassword(api.walletChangePasswordHandler, requiredPassword))
 	}
 
 	// Apply UserAgent middleware and return the API
-	api.router = RequireUserAgent(router, requiredUserAgent)
+	api.router = cleanCloseHandler(RequireUserAgent(router, requiredUserAgent))
 	return api
 }
 
@@ -265,10 +310,11 @@ func UnrecognizedCallHandler(w http.ResponseWriter, req *http.Request) {
 func WriteError(w http.ResponseWriter, err Error, code int) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	if encodeErr := json.NewEncoder(w).Encode(err); encodeErr != nil {
+	encodingErr := json.NewEncoder(w).Encode(err)
+	if _, isJsonErr := encodingErr.(*json.SyntaxError); isJsonErr {
 		// Marshalling should only fail in the event of a developer error.
 		// Specifically, only non-marshallable types should cause an error here.
-		build.Critical("failed to encode API error response:", encodeErr)
+		build.Critical("failed to encode API error response:", encodingErr)
 	}
 }
 
@@ -277,7 +323,8 @@ func WriteError(w http.ResponseWriter, err Error, code int) {
 // accordingly.
 func WriteJSON(w http.ResponseWriter, obj interface{}) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	if err := json.NewEncoder(w).Encode(obj); err != nil {
+	err := json.NewEncoder(w).Encode(obj)
+	if _, isJsonErr := err.(*json.SyntaxError); isJsonErr {
 		// Marshalling should only fail in the event of a developer error.
 		// Specifically, only non-marshallable types should cause an error here.
 		build.Critical("failed to encode API response:", err)

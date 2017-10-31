@@ -25,13 +25,14 @@ var (
 // contract covers many pieces.
 type file struct {
 	name        string
-	size        uint64
+	size        uint64 // Static - can be accessed without lock.
 	contracts   map[types.FileContractID]fileContract
-	masterKey   crypto.TwofishKey
-	erasureCode modules.ErasureCoder
-	pieceSize   uint64
-	mode        uint32 // actually an os.FileMode
-	mu          sync.RWMutex
+	masterKey   crypto.TwofishKey    // Static - can be accessed without lock.
+	erasureCode modules.ErasureCoder // Static - can be accessed without lock.
+	pieceSize   uint64               // Static - can be accessed without lock.
+	mode        uint32               // actually an os.FileMode
+
+	mu sync.RWMutex
 }
 
 // A fileContract is a contract covering an arbitrary number of file pieces.
@@ -46,6 +47,9 @@ type fileContract struct {
 
 // pieceData contains the metadata necessary to request a piece from a
 // fetcher.
+//
+// TODO: Add an 'Unavailable' flag that can be set if the host loses the piece.
+// Some TODOs exist in 'repair.go' related to this field.
 type pieceData struct {
 	Chunk      uint64      // which chunk the piece belongs to
 	Piece      uint64      // the index of the piece in the chunk
@@ -77,11 +81,12 @@ func (f *file) numChunks() uint64 {
 }
 
 // available indicates whether the file is ready to be downloaded.
-func (f *file) available() bool {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
+func (f *file) available(isOffline func(types.FileContractID) bool) bool {
 	chunkPieces := make([]int, f.numChunks())
 	for _, fc := range f.contracts {
+		if isOffline(fc.ID) {
+			continue
+		}
 		for _, p := range fc.Pieces {
 			chunkPieces[p.Chunk]++
 		}
@@ -98,8 +103,6 @@ func (f *file) available() bool {
 // been uploaded. Note that a file may be Available long before UploadProgress
 // reaches 100%, and UploadProgress may report a value greater than 100%.
 func (f *file) uploadProgress() float64 {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
 	var uploaded uint64
 	for _, fc := range f.contracts {
 		uploaded += uint64(len(fc.Pieces)) * f.pieceSize
@@ -111,8 +114,9 @@ func (f *file) uploadProgress() float64 {
 
 // redundancy returns the redundancy of the least redundant chunk. A file
 // becomes available when this redundancy is >= 1. Assumes that every piece is
-// unique within a file contract. -1 is returned if the file has size 0.
-func (f *file) redundancy() float64 {
+// unique within a file contract. -1 is returned if the file has size 0. It
+// takes one argument, a map of offline contracts for this file.
+func (f *file) redundancy(isOffline func(types.FileContractID) bool) float64 {
 	if f.size == 0 {
 		return -1
 	}
@@ -125,6 +129,10 @@ func (f *file) redundancy() float64 {
 		return -1
 	}
 	for _, fc := range f.contracts {
+		// do not count pieces from the contract if the contract is offline
+		if isOffline(fc.ID) {
+			continue
+		}
 		for _, p := range fc.Pieces {
 			piecesPerChunk[p.Chunk]++
 		}
@@ -141,8 +149,6 @@ func (f *file) redundancy() float64 {
 // expiration returns the lowest height at which any of the file's contracts
 // will expire.
 func (f *file) expiration() types.BlockHeight {
-	f.mu.RLock()
-	defer f.mu.RUnlock()
 	if len(f.contracts) == 0 {
 		return 0
 	}
@@ -157,12 +163,11 @@ func (f *file) expiration() types.BlockHeight {
 
 // newFile creates a new file object.
 func newFile(name string, code modules.ErasureCoder, pieceSize, fileSize uint64) *file {
-	key, _ := crypto.GenerateTwofishKey()
 	return &file{
 		name:        name,
 		size:        fileSize,
 		contracts:   make(map[types.FileContractID]fileContract),
-		masterKey:   key,
+		masterKey:   crypto.GenerateTwofishKey(),
 		erasureCode: code,
 		pieceSize:   pieceSize,
 	}
@@ -170,6 +175,9 @@ func newFile(name string, code modules.ErasureCoder, pieceSize, fileSize uint64)
 
 // DeleteFile removes a file entry from the renter and deletes its data from
 // the hosts it is stored on.
+//
+// TODO: The data is not cleared from any contracts where the host is not
+// immediately online.
 func (r *Renter) DeleteFile(nickname string) error {
 	lockID := r.mu.Lock()
 	f, exists := r.files[nickname]
@@ -178,7 +186,11 @@ func (r *Renter) DeleteFile(nickname string) error {
 		return ErrUnknownPath
 	}
 	delete(r.files, nickname)
-	os.RemoveAll(filepath.Join(r.persistDir, f.name+ShareExtension))
+	delete(r.tracking, nickname)
+	err := os.RemoveAll(filepath.Join(r.persistDir, f.name+ShareExtension))
+	if err != nil {
+		r.log.Println("WARN: couldn't remove .sia file during delete:", err)
+	}
 	r.saveSync()
 	r.mu.Unlock(lockID)
 
@@ -186,50 +198,46 @@ func (r *Renter) DeleteFile(nickname string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// TODO: this is ugly because we only have the Contracts method for
-	// looking up contracts.
-	var contracts []modules.RenterContract
-	for _, c := range r.hostContractor.Contracts() {
-		if _, ok := f.contracts[c.ID]; ok {
-			contracts = append(contracts, c)
-		}
-	}
-	for _, c := range contracts {
-		editor, err := r.hostContractor.Editor(c.ID)
-		if err != nil {
-			// TODO: what if the host isn't online?
-			continue
-		}
-		for _, root := range c.MerkleRoots {
-			editor.Delete(root)
-		}
-		delete(f.contracts, c.ID)
-	}
+	// TODO: delete the sectors of the file as well.
 
 	return nil
 }
 
 // FileList returns all of the files that the renter has.
 func (r *Renter) FileList() []modules.FileInfo {
+	var files []*file
 	lockID := r.mu.RLock()
-	defer r.mu.RUnlock(lockID)
-
-	files := make([]modules.FileInfo, 0, len(r.files))
 	for _, f := range r.files {
-		// _, renewing := r.tracking[f.name]
-		// TODO: bring back per-file renewing
+		files = append(files, f)
+	}
+	r.mu.RUnlock(lockID)
+
+	isOffline := func(id types.FileContractID) bool {
+		id = r.hostContractor.ResolveID(id)
+		offline := r.hostContractor.IsOffline(id)
+		contract, exists := r.hostContractor.ContractByID(id)
+		if !exists {
+			return true
+		}
+		return offline || !contract.GoodForRenew
+	}
+
+	var fileList []modules.FileInfo
+	for _, f := range files {
+		f.mu.RLock()
 		renewing := true
-		files = append(files, modules.FileInfo{
+		fileList = append(fileList, modules.FileInfo{
 			SiaPath:        f.name,
 			Filesize:       f.size,
-			Available:      f.available(),
-			Redundancy:     f.redundancy(),
 			Renewing:       renewing,
+			Available:      f.available(isOffline),
+			Redundancy:     f.redundancy(isOffline),
 			UploadProgress: f.uploadProgress(),
 			Expiration:     f.expiration(),
 		})
+		f.mu.RUnlock()
 	}
-	return files
+	return fileList
 }
 
 // RenameFile takes an existing file and changes the nickname. The original
@@ -266,16 +274,16 @@ func (r *Renter) RenameFile(currentName, newName string) error {
 	// Update the entries in the renter.
 	delete(r.files, currentName)
 	r.files[newName] = file
+	if t, ok := r.tracking[currentName]; ok {
+		delete(r.tracking, currentName)
+		r.tracking[newName] = t
+	}
 	err = r.saveSync()
 	if err != nil {
 		return err
 	}
 
 	// Delete the old .sia file.
-	// NOTE: proper error handling is difficult here. For example, if the
-	// removal fails, should the entry in r.files be preserved? For now we will
-	// keep things simple, but it is important that our approach feels
-	// intuitive/unsurprising and doesn't put the user's data at risk.
 	oldPath := filepath.Join(r.persistDir, currentName+ShareExtension)
 	return os.RemoveAll(oldPath)
 }

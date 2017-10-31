@@ -4,12 +4,10 @@ package types
 // for working with blocks.
 
 import (
-	"encoding/json"
-	"fmt"
-	"io"
+	"bytes"
 
+	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/crypto"
-	"github.com/NebulousLabs/Sia/encoding"
 )
 
 const (
@@ -114,12 +112,33 @@ func (b Block) ID() BlockID {
 // transactions (one leaf per transaction).
 func (b Block) MerkleRoot() crypto.Hash {
 	tree := crypto.NewTree()
+	var buf bytes.Buffer
 	for _, payout := range b.MinerPayouts {
-		tree.PushObject(payout)
+		payout.MarshalSia(&buf)
+		tree.Push(buf.Bytes())
+		buf.Reset()
 	}
 	for _, txn := range b.Transactions {
-		tree.PushObject(txn)
+		txn.MarshalSia(&buf)
+		tree.Push(buf.Bytes())
+		buf.Reset()
 	}
+
+	// Sanity check - verify that this root is the same as the root provided in
+	// the old implementation.
+	if build.DEBUG {
+		verifyTree := crypto.NewTree()
+		for _, payout := range b.MinerPayouts {
+			verifyTree.PushObject(payout)
+		}
+		for _, txn := range b.Transactions {
+			verifyTree.PushObject(txn)
+		}
+		if tree.Root() != verifyTree.Root() {
+			panic("Block MerkleRoot implementation is broken")
+		}
+	}
+
 	return tree.Root()
 }
 
@@ -131,37 +150,4 @@ func (b Block) MinerPayoutID(i uint64) SiacoinOutputID {
 		b.ID(),
 		i,
 	))
-}
-
-// MarshalSia implements the encoding.SiaMarshaler interface.
-func (b Block) MarshalSia(w io.Writer) error {
-	w.Write(b.ParentID[:])
-	w.Write(b.Nonce[:])
-	w.Write(encoding.EncUint64(uint64(b.Timestamp)))
-	return encoding.NewEncoder(w).EncodeAll(b.MinerPayouts, b.Transactions)
-}
-
-// UnmarshalSia implements the encoding.SiaUnmarshaler interface.
-func (b *Block) UnmarshalSia(r io.Reader) error {
-	io.ReadFull(r, b.ParentID[:])
-	io.ReadFull(r, b.Nonce[:])
-	tsBytes := make([]byte, 8)
-	io.ReadFull(r, tsBytes)
-	b.Timestamp = Timestamp(encoding.DecUint64(tsBytes))
-	return encoding.NewDecoder(r).DecodeAll(&b.MinerPayouts, &b.Transactions)
-}
-
-// MarshalJSON marshales a block id as a hex string.
-func (bid BlockID) MarshalJSON() ([]byte, error) {
-	return json.Marshal(bid.String())
-}
-
-// String prints the block id in hex.
-func (bid BlockID) String() string {
-	return fmt.Sprintf("%x", bid[:])
-}
-
-// UnmarshalJSON decodes the json hex string of the block id.
-func (bid *BlockID) UnmarshalJSON(b []byte) error {
-	return (*crypto.Hash)(bid).UnmarshalJSON(b)
 }

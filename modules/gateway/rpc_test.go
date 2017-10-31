@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"errors"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,9 +14,9 @@ import (
 
 func TestRPCID(t *testing.T) {
 	cases := map[rpcID]string{
-		rpcID{}:                                       "        ",
-		rpcID{'f', 'o', 'o'}:                          "foo     ",
-		rpcID{'f', 'o', 'o', 'b', 'a', 'r', 'b', 'a'}: "foobarba",
+		{}:                                       "        ",
+		{'f', 'o', 'o'}:                          "foo     ",
+		{'f', 'o', 'o', 'b', 'a', 'r', 'b', 'a'}: "foobarba",
 	}
 	for id, s := range cases {
 		if id.String() != s {
@@ -40,7 +43,8 @@ func TestRegisterRPC(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	g := newTestingGateway("TestRegisterRPC", t)
+	t.Parallel()
+	g := newTestingGateway(t)
 	defer g.Close()
 
 	g.RegisterRPC("Foo", func(conn modules.PeerConn) error { return nil })
@@ -58,9 +62,10 @@ func TestUnregisterRPC(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	g1 := newTestingGateway("TestUnregisterRPC1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestUnregisterRPC2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	err := g2.Connect(g1.Address())
@@ -103,7 +108,8 @@ func TestRegisterConnectCall(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	g := newTestingGateway("TestRegisterConnectCall", t)
+	t.Parallel()
+	g := newTestingGateway(t)
 	defer g.Close()
 
 	// Register an on-connect call.
@@ -122,9 +128,10 @@ func TestUnregisterConnectCallPanics(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	g1 := newTestingGateway("TestUnregisterConnectCall1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestUnregisterConnectCall2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	rpcChan := make(chan struct{})
@@ -171,15 +178,15 @@ func TestRPC(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g1 := newTestingGateway("TestRPC1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
 
 	if err := g1.RPC("foo.com:123", "", nil); err == nil {
 		t.Fatal("RPC on unconnected peer succeeded")
 	}
 
-	g2 := newTestingGateway("TestRPC2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	err := g1.Connect(g2.Address())
@@ -247,10 +254,10 @@ func TestThreadedHandleConn(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g1 := newTestingGateway("TestThreadedHandleConn1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestThreadedHandleConn2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	err := g1.Connect(g2.Address())
@@ -311,12 +318,12 @@ func TestBroadcast(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g1 := newTestingGateway("TestBroadcast1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestBroadcast2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
-	g3 := newTestingGateway("TestBroadcast3", t)
+	g3 := newNamedTestingGateway(t, "3")
 	defer g3.Close()
 
 	err := g1.Connect(g2.Address())
@@ -355,7 +362,7 @@ func TestBroadcast(t *testing.T) {
 	select {
 	case <-bothDoneChan:
 		// Both g2 and g3 should receive the broadcast.
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("broadcasting to gateway.Peers() should broadcast to all peers")
 	}
 	if g2Payload != "bar" || g3Payload != "bar" {
@@ -435,10 +442,10 @@ func TestOutboundAndInboundRPCs(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g1 := newTestingGateway("TestRPC1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestRPC2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	rpcChanG1 := make(chan struct{})
@@ -468,8 +475,8 @@ func TestOutboundAndInboundRPCs(t *testing.T) {
 	// Call the "recv" RPC on g1. We don't know g1's address as g2 sees it, so we
 	// get it from the first address in g2's peer list.
 	var addr modules.NetAddress
-	for p_addr := range g2.peers {
-		addr = p_addr
+	for pAddr := range g2.peers {
+		addr = pAddr
 		break
 	}
 	err = g2.RPC(addr, "recv", func(conn modules.PeerConn) error { return nil })
@@ -484,10 +491,10 @@ func TestCallingRPCFromRPC(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-
-	g1 := newTestingGateway("TestCallingRPCFromRPC1", t)
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
 	defer g1.Close()
-	g2 := newTestingGateway("TestCallingRPCFromRPC2", t)
+	g2 := newNamedTestingGateway(t, "2")
 	defer g2.Close()
 
 	errChan := make(chan error)
@@ -532,5 +539,95 @@ func TestCallingRPCFromRPC(t *testing.T) {
 	case <-barChan:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected BAR RPC to be called")
+	}
+}
+
+// TestRPCRatelimit checks that a peer calling an RPC repeatedly does not result
+// in a crash.
+func TestRPCRatelimit(t *testing.T) {
+	if testing.Short() {
+		t.SkipNow()
+	}
+	t.Parallel()
+	g1 := newNamedTestingGateway(t, "1")
+	defer g1.Close()
+	g2 := newNamedTestingGateway(t, "2")
+	defer g2.Close()
+
+	var atomicCalls, atomicErrs uint64
+	g2.RegisterRPC("recv", func(conn modules.PeerConn) error {
+		_, err := conn.Write([]byte("hi"))
+		if err != nil {
+			atomic.AddUint64(&atomicErrs, 1)
+			return err
+		}
+		atomic.AddUint64(&atomicCalls, 1)
+		return nil
+	})
+
+	err := g1.Connect(g2.Address())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Block until the connection is confirmed.
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		g1.mu.Lock()
+		g1Peers := len(g1.peers)
+		g1.mu.Unlock()
+		g2.mu.Lock()
+		g2Peers := len(g2.peers)
+		g2.mu.Unlock()
+		if g1Peers > 0 || g2Peers > 0 {
+			break
+		}
+	}
+	g1.mu.Lock()
+	g1Peers := len(g1.peers)
+	g1.mu.Unlock()
+	g2.mu.Lock()
+	g2Peers := len(g2.peers)
+	g2.mu.Unlock()
+	if g1Peers == 0 || g2Peers == 0 {
+		t.Fatal("Peers did not connect to eachother")
+	}
+
+	// Call "recv" in a tight loop. Check that the number of successful calls
+	// does not exceed the ratelimit.
+	start := time.Now()
+	var wg sync.WaitGroup
+	targetDuration := rpcStdDeadline * 4 / 3
+	maxCallsForDuration := targetDuration / peerRPCDelay
+	callVolume := int(maxCallsForDuration * 3 / 5)
+	for i := 0; i < callVolume; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// Call an RPC on our peer. Error is ignored, as many are expected
+			// and indicate that the test is working.
+			_ = g1.RPC(g2.Address(), "recv", func(conn modules.PeerConn) error {
+				buf := make([]byte, 2)
+				_, err := conn.Read(buf)
+				if err != nil {
+					return err
+				}
+				if string(buf) != "hi" {
+					return errors.New("caller rpc failed")
+				}
+				return nil
+			})
+		}()
+		// Sleep for a little bit so that the connections are coming all in a
+		// row instead of all at once. But sleep for little enough time that the
+		// number of connectings is still far surpassing the allowed ratelimit.
+		time.Sleep(peerRPCDelay / 10)
+	}
+	wg.Wait()
+
+	stop := time.Now()
+	elapsed := stop.Sub(start)
+	expected := peerRPCDelay * (time.Duration(atomic.LoadUint64(&atomicCalls)) + 1)
+	if elapsed*10/9 < expected {
+		t.Error("ratelimit does not seem to be effective", expected, elapsed)
 	}
 }

@@ -1,56 +1,19 @@
 package api
 
-// ecosystem_test.go provides tooling and tests for whole-ecosystem testing,
-// consisting of multiple full, non-state-sharing nodes connected in various
-// arrangements and performing various full-ecosystem tasks.
+// ecosystem_test.go provides tests for whole-ecosystem testing, consisting of
+// multiple full, non-state-sharing nodes connected in various arrangements and
+// performing various full-ecosystem tasks.
+//
+// To the absolute greatest extent possible, nodes are queried and updated
+// exclusively through the API.
 
 import (
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/types"
 )
-
-// synchronizationCheck takes a bunch of server testers as input and checks
-// that they all have the same current block as the first server tester. The
-// first server tester needs to have the most recent block in order for the
-// check to work.
-func synchronizationCheck(sts []*serverTester) (types.BlockID, error) {
-	// Prefer returning an error in the event of a zero-length server tester -
-	// an error should be returned if the developer accidentally uses a nil
-	// slice instead of whatever value was intended, and there's no reason to
-	// check for synchronization if there aren't any nodes to be synchronized.
-	if len(sts) == 0 {
-		return types.BlockID{}, errors.New("no server testers provided")
-	}
-
-	var cg ConsensusGET
-	err := sts[0].getAPI("/consensus", &cg)
-	if err != nil {
-		return types.BlockID{}, err
-	}
-	leaderBlockID := cg.CurrentBlock
-	for i := range sts {
-		// Spin until the current block matches the leader block.
-		success := false
-		for j := 0; j < 100; j++ {
-			err = sts[i].getAPI("/consensus", &cg)
-			if err != nil {
-				return types.BlockID{}, err
-			}
-			if cg.CurrentBlock == leaderBlockID {
-				success = true
-				break
-			}
-			time.Sleep(time.Millisecond * 100)
-		}
-		if !success {
-			return types.BlockID{}, errors.New("synchronization check failed - nodes do not seem to be synchronized")
-		}
-	}
-	return leaderBlockID, nil
-}
 
 // TestHostPoorConnectivity creates several full server testers and links them
 // together in a way that might mimic a full host ecosystem with a renter, and
@@ -60,40 +23,48 @@ func synchronizationCheck(sts []*serverTester) (types.BlockID, error) {
 // host must get a file contract to the blockchain despite not getting any of
 // the dependencies into the transaction pool from the flood network.
 func TestHostPoorConnectivity(t *testing.T) {
-	if testing.Short() {
+	if testing.Short() || !build.VLONG {
 		t.SkipNow()
 	}
+	t.Parallel()
 
 	// Create the various nodes that will be forming the simulated ecosystem of
 	// this test.
-	stLeader, err := createServerTester("TestHostPoorConnectivity - Leader")
+	stLeader, err := createServerTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	stHost1, err := blankServerTester("TestHostPoorConnectivity - Host 1")
+	defer stLeader.panicClose()
+	stHost1, err := blankServerTester(t.Name() + " - Host 1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stHost2, err := blankServerTester("TestHostPoorConnectivity - Host 2")
+	defer stHost1.panicClose()
+	stHost2, err := blankServerTester(t.Name() + " - Host 2")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stHost3, err := blankServerTester("TestHostPoorConnectivity - Host 3")
+	defer stHost2.panicClose()
+	stHost3, err := blankServerTester(t.Name() + " - Host 3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stHost4, err := blankServerTester("TestHostPoorConnectivity - Host 4")
+	defer stHost3.panicClose()
+	stHost4, err := blankServerTester(t.Name() + " - Host 4")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stRenter1, err := blankServerTester("TestHostPoorConnectivity - Renter 1")
+	defer stHost4.panicClose()
+	stRenter1, err := blankServerTester(t.Name() + " - Renter 1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	stRenter2, err := blankServerTester("TestHostPoorConnectivity - Renter 2")
+	defer stRenter1.panicClose()
+	stRenter2, err := blankServerTester(t.Name() + " - Renter 2")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer stRenter2.panicClose()
 
 	// Fetch all of the addresses of the nodes that got created.
 	var ggSTL, ggSTH1, ggSTH2, ggSTH3, ggSTH4, ggSTR1, ggSTR2 GatewayGET

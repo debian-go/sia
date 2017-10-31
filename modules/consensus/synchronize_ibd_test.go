@@ -14,20 +14,21 @@ import (
 	"github.com/NebulousLabs/Sia/build"
 	"github.com/NebulousLabs/Sia/modules"
 	"github.com/NebulousLabs/Sia/modules/gateway"
+	"github.com/NebulousLabs/Sia/types"
 )
 
 // TestSimpleInitialBlockchainDownload tests that
 // threadedInitialBlockchainDownload synchronizes with peers in the simple case
 // where there are 8 outbound peers with the same blockchain.
 func TestSimpleInitialBlockchainDownload(t *testing.T) {
-	if testing.Short() {
+	if testing.Short() || !build.VLONG {
 		t.SkipNow()
 	}
 
 	// Create 8 remote peers.
 	remoteCSTs := make([]*consensusSetTester, 8)
 	for i := range remoteCSTs {
-		cst, err := blankConsensusSetTester(fmt.Sprintf("TestSimpleInitialBlockchainDownload - %v", i))
+		cst, err := blankConsensusSetTester(t.Name() + strconv.Itoa(i))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -35,7 +36,7 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 		remoteCSTs[i] = cst
 	}
 	// Create the "local" peer.
-	localCST, err := blankConsensusSetTester("TestSimpleInitialBlockchainDownload - local")
+	localCST, err := blankConsensusSetTester(t.Name() + "- local")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,8 +72,8 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, cst := range remoteCSTs {
-			err = cst.cs.managedAcceptBlock(b)
-			if err != nil && err != modules.ErrBlockKnown {
+			_, err = cst.cs.managedAcceptBlocks([]types.Block{b})
+			if err != nil && err != modules.ErrBlockKnown && err != modules.ErrNonExtendingBlock {
 				t.Fatal(err)
 			}
 		}
@@ -97,7 +98,7 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, cst := range remoteCSTs {
-			err = cst.cs.managedAcceptBlock(b)
+			_, err = cst.cs.managedAcceptBlocks([]types.Block{b})
 			if err != nil && err != modules.ErrBlockKnown {
 				t.Fatal(err)
 			}
@@ -122,7 +123,7 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = localCST.cs.managedAcceptBlock(b)
+		_, err = localCST.cs.managedAcceptBlocks([]types.Block{b})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +134,7 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, cst := range remoteCSTs {
-			err = cst.cs.managedAcceptBlock(b)
+			_, err = cst.cs.managedAcceptBlocks([]types.Block{b})
 			if err != nil && err != modules.ErrBlockKnown {
 				t.Log(i)
 				t.Fatal(err)
@@ -159,7 +160,7 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = localCST.cs.managedAcceptBlock(b)
+		_, err = localCST.cs.managedAcceptBlocks([]types.Block{b})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,7 +171,7 @@ func TestSimpleInitialBlockchainDownload(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, cst := range remoteCSTs {
-			err = cst.cs.managedAcceptBlock(b)
+			_, err = cst.cs.managedAcceptBlocks([]types.Block{b})
 			if err != nil && err != modules.ErrBlockKnown {
 				t.Log(i)
 				t.Fatal(err)
@@ -215,7 +216,7 @@ func TestInitialBlockchainDownloadDisconnects(t *testing.T) {
 		t.SkipNow()
 	}
 
-	testdir := build.TempDir(modules.ConsensusDir, "TestInitialBlockchainDownloadDisconnects")
+	testdir := build.TempDir(modules.ConsensusDir, t.Name())
 	g, err := gateway.New("localhost:0", false, filepath.Join(testdir, "local", modules.GatewayDir))
 	if err != nil {
 		t.Fatal(err)
@@ -283,19 +284,13 @@ func TestInitialBlockchainDownloadDisconnects(t *testing.T) {
 //  - at least minNumOutbound synced outbound peers
 //  - or at least 1 synced outbound peer and minIBDWaitTime has passed since beginning IBD.
 func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
-	if testing.Short() {
+	if testing.Short() || !build.VLONG {
 		t.SkipNow()
 	}
+	testdir := build.TempDir(modules.ConsensusDir, t.Name())
 
-	// Set minIBDWaitTime to 1s for just this test because no blocks are
-	// transferred between peers so the wait time can be very short.
-	actualMinIBDWaitTime := minIBDWaitTime
-	defer func() {
-		minIBDWaitTime = actualMinIBDWaitTime
-	}()
-	minIBDWaitTime = 1 * time.Second
-
-	testdir := build.TempDir(modules.ConsensusDir, "TestInitialBlockchainDownloadDoneRules")
+	// Create a gateway that can be forced to return errors when its RPC method
+	// is called, then create a consensus set using that gateway.
 	g, err := gateway.New("localhost:0", false, filepath.Join(testdir, "local", modules.GatewayDir))
 	if err != nil {
 		t.Fatal(err)
@@ -311,26 +306,31 @@ func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
 	}
 	defer cs.Close()
 
+	// Verify that the consensus set will not signal IBD completion when it has
+	// zero peers.
 	doneChan := make(chan struct{})
-
-	// Test when there are 0 peers.
 	go func() {
 		cs.threadedInitialBlockchainDownload()
 		doneChan <- struct{}{}
 	}()
-	defer close(doneChan)
 	select {
 	case <-doneChan:
 		t.Error("threadedInitialBlockchainDownload finished with 0 synced peers")
 	case <-time.After(minIBDWaitTime + ibdLoopDelay):
 	}
 
-	// Test when there are only inbound peers. Wrap the peers in a function so
-	// that they are closed when the test is finished.
+	// threadedInitialBlockchainDownload is already running. Feed some inbound
+	// peers to the consensus set. The gateway, through its own process of
+	// trying to find outbound peers, will eventually convert one of the
+	// inbound peers to an outbound peer. IBD should not complete until there
+	// is at least one outbound peer.
+	//
+	// After this function has completed, all of the peers will be shutdown,
+	// leaving the consensus set once again with zero peers.
 	func() {
 		inboundCSTs := make([]*consensusSetTester, 8)
 		for i := 0; i < len(inboundCSTs); i++ {
-			inboundCST, err := blankConsensusSetTester(filepath.Join("TestInitialBlockchainDownloadDoneRules", fmt.Sprintf("remote - inbound %v", i)))
+			inboundCST, err := blankConsensusSetTester(filepath.Join(t.Name(), " - inbound "+strconv.Itoa(i)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -351,7 +351,11 @@ func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
 		}
 	}()
 
-	// Test when there is 1 outbound peer that isn't synced.
+	// Try another initial blockchain download, this time with an outbound peer
+	// who is not synced. The consensus set should not determine itself to have
+	// completed IBD with only unsynced peers.
+	//
+	// 'NotSynced' is simulated in this peer by having all RPCs return errors.
 	go func() {
 		cs.threadedInitialBlockchainDownload()
 		doneChan <- struct{}{}
@@ -377,8 +381,10 @@ func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
 	case <-time.After(minIBDWaitTime + ibdLoopDelay):
 	}
 
-	// Test when there is 1 peer that is synced and one that is not synced.
-	gatewayNoTimeout, err := gateway.New("localhost:0", false, filepath.Join(testdir, "remote - no timeout", modules.GatewayDir))
+	// Add a peer that is synced to the peer that is not synced. IBD should not
+	// be considered completed when there is a tie between synced and
+	// not-synced peers.
+	gatewayNoTimeout, err := gateway.New("localhost:0", false, filepath.Join(testdir, "remote - no timeout1", modules.GatewayDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +403,9 @@ func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
 	}
 
 	// Test when there is 2 peers that are synced and one that is not synced.
-	gatewayNoTimeout2, err := gateway.New("localhost:0", false, filepath.Join(testdir, "remote - no timeout", modules.GatewayDir))
+	// There is now a majority synced peers and the minIBDWaitTime has passed,
+	// so the IBD function should finish.
+	gatewayNoTimeout2, err := gateway.New("localhost:0", false, filepath.Join(testdir, "remote - no timeout2", modules.GatewayDir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,14 +419,14 @@ func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
 	}
 	select {
 	case <-doneChan:
-	case <-time.After(minIBDWaitTime + ibdLoopDelay*2):
+	case <-time.After(4 * (minIBDWaitTime + ibdLoopDelay)):
 		t.Fatal("threadedInitialBlockchainDownload never finished with 2 synced peers and 1 non-synced peer")
 	}
 
 	// Test when there are >= minNumOutbound peers and >= minNumOutbound peers are synced.
 	gatewayNoTimeouts := make([]modules.Gateway, minNumOutbound-1)
 	for i := 0; i < len(gatewayNoTimeouts); i++ {
-		tmpG, err := gateway.New("localhost:0", false, filepath.Join(testdir, fmt.Sprintf("remote - no timeout %v", i), modules.GatewayDir))
+		tmpG, err := gateway.New("localhost:0", false, filepath.Join(testdir, fmt.Sprintf("remote - no timeout-auto-%v", i+3), modules.GatewayDir))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -449,17 +457,17 @@ func TestInitialBlockchainDownloadDoneRules(t *testing.T) {
 // eachother as they would report EOF instead of performing correct block
 // exchange.
 func TestGenesisBlockSync(t *testing.T) {
-	if testing.Short() {
+	if testing.Short() || !build.VLONG {
 		t.SkipNow()
 	}
 
 	// Create two consensus sets that have zero blocks each (except for the
 	// genesis block).
-	cst1, err := blankConsensusSetTester("TestGenesisBlockSync1")
+	cst1, err := blankConsensusSetTester(t.Name() + "1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cst2, err := blankConsensusSetTester("TestGenesisBlockSync2")
+	cst2, err := blankConsensusSetTester(t.Name() + "2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -482,6 +490,6 @@ func TestGenesisBlockSync(t *testing.T) {
 
 	time.Sleep(time.Second * 12)
 	if len(cst1.gateway.Peers()) == 0 {
-		t.Error("disconnection occured!")
+		t.Error("disconnection occurred!")
 	}
 }

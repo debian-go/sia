@@ -3,7 +3,6 @@ package proto
 import (
 	"errors"
 	"net"
-	"time"
 
 	"github.com/NebulousLabs/Sia/crypto"
 	"github.com/NebulousLabs/Sia/encoding"
@@ -13,7 +12,7 @@ import (
 
 // Renew negotiates a new contract for data already stored with a host, and
 // submits the new contract transaction to tpool.
-func Renew(contract modules.RenterContract, params ContractParams, txnBuilder transactionBuilder, tpool transactionPool) (modules.RenterContract, error) {
+func Renew(contract modules.RenterContract, params ContractParams, txnBuilder transactionBuilder, tpool transactionPool, hdb hostDB, cancel <-chan struct{}) (modules.RenterContract, error) {
 	// extract vars from params, for convenience
 	host, filesize, startHeight, endHeight, refundAddress := params.Host, params.Filesize, params.StartHeight, params.EndHeight, params.RefundAddress
 	ourSK := contract.SecretKey
@@ -38,7 +37,6 @@ func Renew(contract modules.RenterContract, params ContractParams, txnBuilder tr
 
 	hostPayout := hostCollateral.Add(host.ContractPrice).Add(basePrice)
 	payout := storageAllocation.Add(hostCollateral.Add(host.ContractPrice)).Mul64(10406).Div64(10000) // renter covers siafund fee
-	renterCost := payout.Sub(hostCollateral)
 
 	// check for negative currency
 	if types.PostTax(startHeight, payout).Cmp(hostPayout) < 0 {
@@ -74,24 +72,39 @@ func Renew(contract modules.RenterContract, params ContractParams, txnBuilder tr
 
 	// calculate transaction fee
 	_, maxFee := tpool.FeeEstimation()
-	fee := maxFee.Mul64(estTxnSize)
+	txnFee := maxFee.Mul64(estTxnSize)
 
 	// build transaction containing fc
-	err := txnBuilder.FundSiacoins(renterCost.Add(fee))
+	renterCost := payout.Sub(hostCollateral).Add(txnFee)
+	err := txnBuilder.FundSiacoins(renterCost)
 	if err != nil {
 		return modules.RenterContract{}, err
 	}
 	txnBuilder.AddFileContract(fc)
 
 	// add miner fee
-	txnBuilder.AddMinerFee(fee)
+	txnBuilder.AddMinerFee(txnFee)
 
 	// create initial transaction set
 	txn, parentTxns := txnBuilder.View()
 	txnSet := append(parentTxns, txn)
 
+	// Increase Successful/Failed interactions accordingly
+	defer func() {
+		// A revision mismatch might not be the host's fault.
+		if err != nil && !IsRevisionMismatch(err) {
+			hdb.IncrementFailedInteractions(contract.HostPublicKey)
+		} else if err == nil {
+			hdb.IncrementSuccessfulInteractions(contract.HostPublicKey)
+		}
+	}()
+
 	// initiate connection
-	conn, err := net.DialTimeout("tcp", string(host.NetAddress), 15*time.Second)
+	dialer := &net.Dialer{
+		Cancel:  cancel,
+		Timeout: connTimeout,
+	}
+	conn, err := dialer.Dial("tcp", string(host.NetAddress))
 	if err != nil {
 		return modules.RenterContract{}, err
 	}
@@ -103,8 +116,10 @@ func Renew(contract modules.RenterContract, params ContractParams, txnBuilder tr
 		return modules.RenterContract{}, errors.New("couldn't initiate RPC: " + err.Error())
 	}
 	// verify that both parties are renewing the same contract
-	if err = verifyRecentRevision(conn, contract); err != nil {
-		return modules.RenterContract{}, errors.New("revision exchange failed: " + err.Error())
+	if err = verifyRecentRevision(conn, contract, host.Version); err != nil {
+		// don't add context; want to preserve the original error type so that
+		// callers can check using IsRevisionMismatch
+		return modules.RenterContract{}, err
 	}
 	// verify the host's settings and confirm its identity
 	host, err = verifySettings(conn, host)
@@ -195,10 +210,7 @@ func Renew(contract modules.RenterContract, params ContractParams, txnBuilder tr
 		FileContractRevisions: []types.FileContractRevision{initRevision},
 		TransactionSignatures: []types.TransactionSignature{renterRevisionSig},
 	}
-	encodedSig, err := crypto.SignHash(revisionTxn.SigHash(0), ourSK)
-	if err != nil {
-		return modules.RenterContract{}, modules.WriteNegotiationRejection(conn, errors.New("failed to sign revision transaction: "+err.Error()))
-	}
+	encodedSig := crypto.SignHash(revisionTxn.SigHash(0), ourSK)
 	revisionTxn.TransactionSignatures[0].Signature = encodedSig[:]
 
 	// Send acceptance and signatures
@@ -249,11 +261,18 @@ func Renew(contract modules.RenterContract, params ContractParams, txnBuilder tr
 
 	return modules.RenterContract{
 		FileContract:    fc,
+		HostPublicKey:   host.PublicKey,
 		ID:              fcid,
 		LastRevision:    initRevision,
 		LastRevisionTxn: revisionTxn,
 		MerkleRoots:     contract.MerkleRoots,
 		NetAddress:      host.NetAddress,
 		SecretKey:       ourSK,
+		StartHeight:     startHeight,
+
+		TotalCost:   renterCost,
+		ContractFee: host.ContractPrice,
+		TxnFee:      txnFee,
+		SiafundFee:  types.Tax(startHeight, fc.Payout),
 	}, nil
 }

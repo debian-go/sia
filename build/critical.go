@@ -12,11 +12,13 @@ import (
 // the running goroutine is printed to help determine the error.
 func Critical(v ...interface{}) {
 	s := "Critical error: " + fmt.Sprintln(v...) + "Please submit a bug report here: https://github.com/NebulousLabs/Sia/issues\n"
-	os.Stderr.WriteString(s)
+	if Release != "testing" {
+		debug.PrintStack()
+		os.Stderr.WriteString(s)
+	}
 	if DEBUG {
 		panic(s)
 	}
-	debug.PrintStack()
 }
 
 // Severe will print a message to os.Stderr. If DEBUG has been set panic will
@@ -26,7 +28,10 @@ func Critical(v ...interface{}) {
 // integrity.
 func Severe(v ...interface{}) {
 	s := "Severe error: " + fmt.Sprintln(v...)
-	os.Stderr.WriteString(s)
+	if Release != "testing" {
+		debug.PrintStack()
+		os.Stderr.WriteString(s)
+	}
 	if DEBUG {
 		panic(s)
 	}

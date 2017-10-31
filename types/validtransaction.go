@@ -7,8 +7,6 @@ package types
 
 import (
 	"errors"
-
-	"github.com/NebulousLabs/Sia/encoding"
 )
 
 var (
@@ -107,14 +105,19 @@ func (t Transaction) correctFileContractRevisions(currentHeight BlockHeight) err
 	return nil
 }
 
-// fitsInABlock checks if the transaction is likely to fit in a block.
-// Currently there is no limitation on transaction size other than it must fit
-// in a block.
-func (t Transaction) fitsInABlock() error {
+// fitsInABlock checks if the transaction is likely to fit in a block. After
+// OakHardforkHeight, transactions must be smaller than 64 KiB.
+func (t Transaction) fitsInABlock(currentHeight BlockHeight) error {
 	// Check that the transaction will fit inside of a block, leaving 5kb for
 	// overhead.
-	if uint64(len(encoding.Marshal(t))) > BlockSizeLimit-5e3 {
+	size := uint64(t.MarshalSiaSize())
+	if size > BlockSizeLimit-5e3 {
 		return ErrTransactionTooLarge
+	}
+	if currentHeight >= OakHardforkBlock {
+		if size > OakHardforkTxnSizeLimit {
+			return ErrTransactionTooLarge
+		}
 	}
 	return nil
 }
@@ -184,9 +187,9 @@ func (t Transaction) followsStorageProofRules() error {
 
 // noRepeats checks that a transaction does not spend multiple outputs twice,
 // submit two valid storage proofs for the same file contract, etc. We
-// frivilously check that a file contract termination and storage proof don't
+// frivolously check that a file contract termination and storage proof don't
 // act on the same file contract. There is very little overhead for doing so,
-// and the check is only frivilous because of the current rule that file
+// and the check is only frivolous because of the current rule that file
 // contract terminations are not valid after the proof window opens.
 func (t Transaction) noRepeats() error {
 	// Check that there are no repeat instances of siacoin outputs, storage
@@ -266,7 +269,7 @@ func (t Transaction) validUnlockConditions(currentHeight BlockHeight) (err error
 // transaction. StandaloneValid will not check that all outputs being spent are
 // legal outputs, as it has no confirmed or unconfirmed set to look at.
 func (t Transaction) StandaloneValid(currentHeight BlockHeight) (err error) {
-	err = t.fitsInABlock()
+	err = t.fitsInABlock(currentHeight)
 	if err != nil {
 		return
 	}

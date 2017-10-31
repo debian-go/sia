@@ -12,11 +12,11 @@ func TestIntegrationExplorerGET(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	st, err := createServerTester("TestIntegrationExplorerGET")
+	st, err := createServerTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	var eg ExplorerGET
 	err = st.getAPI("/explorer", &eg)
@@ -37,11 +37,11 @@ func TestIntegrationExplorerBlockGET(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	st, err := createServerTester("TestIntegrationExplorerBlockGET")
+	st, err := createServerTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	var ebg ExplorerBlockGET
 	err = st.getAPI("/explorer/blocks/0", &ebg)
@@ -62,11 +62,11 @@ func TestIntegrationExplorerHashGet(t *testing.T) {
 	if testing.Short() {
 		t.SkipNow()
 	}
-	st, err := createServerTester("TestIntegrationExplorerHashGET")
+	st, err := createServerTester(t.Name())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer st.server.Close()
+	defer st.server.panicClose()
 
 	var ehg ExplorerHashGET
 	gb := types.GenesisBlock
