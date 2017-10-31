@@ -1,12 +1,12 @@
 sia (1.2.1-1) UNRELEASED; urgency=medium
 
   * Added bash completion for siac
-  * Change section to net (Closes: #855271) 
+  * Change section to net (Closes: #855271)
   * Added manpages for siac
-  * Added logdir to debian/dirs 
-  * Added logrotate 
+  * Added logdir to debian/dirs
+  * Added logrotate
   * Exact version of muxido for stabillity
-  * Manpage for siad 
+  * Manpage for siad
   * Added system-d config
   * Added user sia with home /var/lib/sia
   * Added logdir /var/lib/sia
