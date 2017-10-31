@@ -1,5 +1,6 @@
-sia (1.2.1-1) UNRELEASED; urgency=medium
+sia (1.3.0-1) unstable; urgency=medium
 
+  [ Bjorn Dolk ]
   * Added bash completion for siac
   * Change section to net (Closes: #855271)
   * Added manpages for siac
@@ -12,7 +13,10 @@ sia (1.2.1-1) UNRELEASED; urgency=medium
   * Added logdir /var/lib/sia
   * Added patch to write logs to /var/log/sia
 
- -- Bjorn Dolk <debian@bjorndolk.com>  Fri, 28 Apr 2017 08:22:19 +0200
+  [ Free Ekanayaka ]
+  * New upstream version 1.3.0
+
+ -- Free Ekanayaka <freee@debian.org>  Tue, 31 Oct 2017 23:54:54 +0000
 
 sia (1.0.4-1) unstable; urgency=medium
 
