@@ -1,21 +1,22 @@
-From: Bjorn Dolk <debian@bjorndolk.com>
-Date: Thu, 18 May 2017 21:50:33 +0200
+From: Free Ekanayaka <freee@debian.org>
+Date: Wed, 1 Nov 2017 00:01:19 +0000
 Subject: inconshreveable-muxado
 
+Use stock inconshreveable-muxado
 ---
- modules/gateway/peers.go | 2 +-
+ modules/gateway/stream.go | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-diff --git a/modules/gateway/peers.go b/modules/gateway/peers.go
-index 24680e7..71a4789 100644
---- a/modules/gateway/peers.go
-+++ b/modules/gateway/peers.go
-@@ -10,7 +10,7 @@ import (
- 	"github.com/NebulousLabs/Sia/encoding"
- 	"github.com/NebulousLabs/Sia/modules"
- 	"github.com/NebulousLabs/fastrand"
+diff --git a/modules/gateway/stream.go b/modules/gateway/stream.go
+index 6b26f25..aae661f 100644
+--- a/modules/gateway/stream.go
++++ b/modules/gateway/stream.go
+@@ -4,7 +4,7 @@ import (
+ 	"net"
+ 
+ 	"github.com/NebulousLabs/Sia/build"
 -	"github.com/NebulousLabs/muxado"
 +	"github.com/inconshreveable/muxado"
+ 	"github.com/xtaci/smux"
  )
  
- var (
