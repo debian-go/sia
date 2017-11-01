@@ -21,6 +21,7 @@ Build-Depends: debhelper (>= 10),
                golang-github-huin-goupnp-dev,
                golang-github-inconshreveable-muxado-dev,
                golang-github-spf13-cobra-dev,
+               golang-github-xtaci-smux-dev,
                bash-completion
 Standards-Version: 3.9.8
 Homepage: https://github.com/NebulousLabs/Sia
