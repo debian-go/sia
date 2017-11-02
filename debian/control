@@ -1,6 +1,6 @@
 Source: sia
 Section: net
-Priority: extra
+Priority: optional
 Maintainer: Debian Go Packaging Team <pkg-go-maintainers@lists.alioth.debian.org>
 Uploaders: Free Ekanayaka <freee@debian.org>, Bjorn Dolk <debian@bjorndolk.com>
 Build-Depends: debhelper (>= 10),
@@ -24,7 +24,7 @@ Build-Depends: debhelper (>= 10),
                golang-github-spf13-cobra-dev,
                golang-github-xtaci-smux-dev,
                bash-completion
-Standards-Version: 3.9.8
+Standards-Version: 4.1.1
 Homepage: https://github.com/NebulousLabs/Sia
 Vcs-Browser: https://anonscm.debian.org/cgit/pkg-go/packages/sia.git
 Vcs-Git: https://anonscm.debian.org/git/pkg-go/packages/sia.git
